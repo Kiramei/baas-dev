@@ -659,7 +659,8 @@ def outbound_dropped_frames(region, header: SharedMemoryHeader) -> int:
 def native_resource_name(kind: str, suffix: str) -> str:
     if sys.platform == "win32":
         return f"Local\\BAAS-{kind}-{suffix}"
-    return f"/baas-{kind}-{suffix}"
+    digest = hashlib.sha1(f"{kind}:{suffix}".encode("utf-8")).hexdigest()[:18]
+    return f"/bb_{digest}"
 
 
 def child_cpu_seconds(pid: int) -> float | None:
