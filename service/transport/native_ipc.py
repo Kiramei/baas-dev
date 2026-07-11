@@ -69,6 +69,8 @@ elif _HAS_POSIX_NATIVE:
     _libc.shm_open.restype = ctypes.c_int
     _libc.ftruncate.argtypes = (ctypes.c_int, ctypes.c_longlong)
     _libc.ftruncate.restype = ctypes.c_int
+    _libc.fchmod.argtypes = (ctypes.c_int, ctypes.c_uint)
+    _libc.fchmod.restype = ctypes.c_int
     _libc.mmap.argtypes = (
         ctypes.c_void_p,
         ctypes.c_size_t,
@@ -267,6 +269,11 @@ class PosixSharedMemoryRegion:
             fd = _libc.shm_open(name_bytes, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         if fd < 0:
             _raise_errno("shm_open")
+        if _libc.fchmod(fd, 0o600) != 0:
+            error = ctypes.get_errno()
+            _libc.close(fd)
+            _libc.shm_unlink(name_bytes)
+            raise NativeIpcError(f"fchmod failed with errno {error}: {os.strerror(error)}")
         if _libc.ftruncate(fd, size) != 0:
             error = ctypes.get_errno()
             _libc.close(fd)
