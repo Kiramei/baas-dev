@@ -804,7 +804,7 @@ def _native_name(kind: str, suffix: str) -> str:
     if sys.platform == "win32":
         return f"Local\\BAAS-{kind}-{suffix}"
     digest = hashlib.sha1(f"{kind}:{suffix}".encode("utf-8")).hexdigest()[:18]
-    return f"/bt-{digest}"
+    return f"/bt_{digest}"
 
 
 async def _read_outbound_frames(region, header, event, expected: int):
