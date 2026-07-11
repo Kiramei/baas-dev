@@ -13,7 +13,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from service.transport.framing import fragment_payload
-from service.transport.native_ipc import create_notification_event, create_shared_memory_region
+from service.transport.native_ipc import (
+    create_notification_event,
+    create_shared_memory_region,
+    open_notification_event,
+    open_shared_memory_region,
+)
 from service.transport.protocol import (
     ABI_VERSION,
     CHANNEL_PROVIDER,
@@ -62,6 +67,29 @@ class NativeSharedMemoryServerIntegrationTests(unittest.TestCase):
 
     def test_main_service_shm_subprocess_handles_remote_binary_stream_and_close(self) -> None:
         _main_service_subprocess_remote_scenario()
+
+    @unittest.skipUnless(
+        sys.platform in {"linux", "darwin"},
+        "POSIX umask behavior only applies to Linux/macOS native IPC",
+    )
+    def test_posix_native_ipc_create_preserves_owner_permissions_under_restrictive_umask(self) -> None:
+        suffix = f"{os.getpid()}-{uuid.uuid4()}"
+        shm_name = _native_name("umask-test-shm", suffix)
+        event_name = _native_name("umask-test-event", suffix)
+        previous_umask = os.umask(0o777)
+        try:
+            with (
+                create_shared_memory_region(shm_name, 4096) as region,
+                create_notification_event(event_name) as event,
+                open_shared_memory_region(shm_name, 4096) as opened_region,
+                open_notification_event(event_name) as opened_event,
+            ):
+                region.write(0, b"ok")
+                assert opened_region.read(0, 2) == b"ok"
+                event.set()
+                assert opened_event.wait(1000)
+        finally:
+            os.umask(previous_umask)
 
 
 def _main_service_subprocess_ready_scenario() -> None:
@@ -769,7 +797,7 @@ def _subprocess_output(proc: subprocess.Popen) -> str:
         stdout, stderr = proc.communicate(timeout=1)
     except subprocess.TimeoutExpired:
         return "subprocess is still running"
-        return f"stdout:\n{stdout}\nstderr:\n{stderr}"
+    return f"stdout:\n{stdout}\nstderr:\n{stderr}"
 
 
 def _native_name(kind: str, suffix: str) -> str:

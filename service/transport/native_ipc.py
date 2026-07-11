@@ -6,7 +6,10 @@ import errno
 import os
 import sys
 import time
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Iterator
 from typing import Optional
 
 
@@ -17,6 +20,7 @@ class NativeIpcError(RuntimeError):
 _NATIVE_PLATFORM = sys.platform
 _HAS_WINDOWS_NATIVE = _NATIVE_PLATFORM == "win32"
 _HAS_POSIX_NATIVE = _NATIVE_PLATFORM in {"linux", "darwin"}
+_UMASK_LOCK = threading.Lock()
 
 
 if _HAS_WINDOWS_NATIVE:
@@ -114,6 +118,16 @@ def _posix_name(name: str) -> bytes:
     if not name.startswith("/"):
         raise NativeIpcError("POSIX native IPC names must start with '/'")
     return name.encode("utf-8")
+
+
+@contextmanager
+def _temporary_umask(mask: int) -> Iterator[None]:
+    with _UMASK_LOCK:
+        previous = os.umask(mask)
+        try:
+            yield
+        finally:
+            os.umask(previous)
 
 
 @dataclass
@@ -249,7 +263,8 @@ class PosixSharedMemoryRegion:
         if size <= 0:
             raise NativeIpcError("shared-memory region size must be greater than zero")
         name_bytes = _posix_name(name)
-        fd = _libc.shm_open(name_bytes, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        with _temporary_umask(0):
+            fd = _libc.shm_open(name_bytes, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         if fd < 0:
             _raise_errno("shm_open")
         if _libc.ftruncate(fd, size) != 0:
@@ -323,7 +338,8 @@ class PosixNotificationEvent:
         if not _HAS_POSIX_NATIVE:
             raise NativeIpcError("native notification events are only implemented for Windows/Linux/macOS in this build")
         name_bytes = _posix_name(name)
-        sem = _libc.sem_open(name_bytes, os.O_CREAT | os.O_EXCL, 0o600, 0)
+        with _temporary_umask(0):
+            sem = _libc.sem_open(name_bytes, os.O_CREAT | os.O_EXCL, 0o600, 0)
         if sem == _SEM_FAILED:
             _raise_errno("sem_open")
         return cls(name=name, _sem=sem, _owner=True)
