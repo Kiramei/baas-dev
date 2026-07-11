@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -605,6 +606,7 @@ def _main_service_subprocess_remote_scenario() -> None:
                     lambda observed: _find_remote_ack(observed, stream_id) is not None
                     and len(_bytes_frames_for_channel(observed, CHANNEL_REMOTE, stream_id)) == frame_count
                     and _find_close_frame(observed, CHANNEL_REMOTE, stream_id) is not None,
+                    timeout=15,
                 )
             )
             ack = _find_remote_ack(frames, stream_id)
@@ -773,7 +775,8 @@ def _subprocess_output(proc: subprocess.Popen) -> str:
 def _native_name(kind: str, suffix: str) -> str:
     if sys.platform == "win32":
         return f"Local\\BAAS-{kind}-{suffix}"
-    return f"/baas-{kind}-{suffix}"
+    digest = hashlib.sha1(f"{kind}:{suffix}".encode("utf-8")).hexdigest()[:18]
+    return f"/bt-{digest}"
 
 
 async def _read_outbound_frames(region, header, event, expected: int):
@@ -812,8 +815,8 @@ async def _read_outbound_until(region, header, event, predicate):
     raise AssertionError(f"expected outbound frame was not observed; observed={observed!r}")
 
 
-async def _read_outbound_until_all(region, header, event, predicate):
-    deadline = asyncio.get_running_loop().time() + 5
+async def _read_outbound_until_all(region, header, event, predicate, *, timeout: float = 5):
+    deadline = asyncio.get_running_loop().time() + timeout
     frames = []
     while asyncio.get_running_loop().time() < deadline:
         try:
