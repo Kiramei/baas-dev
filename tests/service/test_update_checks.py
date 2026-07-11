@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import subprocess
+import zipfile
 
 from deploy.installer.const import GetShaMethod
 from service.update import checks
@@ -202,3 +204,126 @@ def test_check_for_update_switches_failed_saved_sha_method(monkeypatch, tmp_path
     assert result["remote"] == "1" * 40
     assert result["method"] == "github"
     assert saved["data"]["general"]["get_remote_sha_method"] == "github"
+
+
+def test_android_update_to_latest_skips_archive_when_sha_is_current(monkeypatch, tmp_path):
+    setup_path = tmp_path / "setup.toml"
+    current_sha = "1" * 40
+    setup_path.write_text(
+        f"""
+[general]
+current_baas_sha = "{current_sha}"
+channel = "stable"
+no_update = false
+get_remote_sha_method = "github"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_get(*_args, **_kwargs):
+        raise AssertionError("current Android backend must not download archive again")
+
+    monkeypatch.setenv("BAAS_ANDROID", "1")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(checks, "_github_api_get_latest_sha", lambda _source, _timeout: (True, current_sha))
+    monkeypatch.setattr(
+        checks,
+        "_android_archive_config",
+        lambda _data, _channel: {
+            "name": "github",
+            "url": "https://github.com/Kiramei/baas-dev.git",
+            "branch": "master",
+        },
+    )
+    monkeypatch.setattr(checks.requests, "get", fail_get)
+
+    events = []
+    result = checks.update_to_latest_with_progress(setup_path, progress=lambda stage, payload: events.append(stage))
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "latest"
+    assert "download_start" not in events
+
+
+def test_android_update_to_latest_updates_old_backend_from_archive(monkeypatch, tmp_path):
+    setup_path = tmp_path / "setup.toml"
+    old_sha = "0" * 40
+    new_sha = "2" * 40
+    setup_path.write_text(
+        f"""
+[general]
+current_baas_sha = "{old_sha}"
+channel = "stable"
+no_update = false
+get_remote_sha_method = "github"
+
+[paths]
+baas_root_path = "."
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "old.py").write_text("old", encoding="utf-8")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "service_auth.json").write_text("keep", encoding="utf-8")
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("baas-dev-master/service/new.py", "new")
+        archive.writestr("baas-dev-master/setup.toml", "should not overwrite")
+        archive.writestr("baas-dev-master/config/service_auth.json", "should not overwrite")
+    archive_payload = archive_bytes.getvalue()
+
+    class FakeResponse:
+        headers = {"content-length": str(len(archive_payload))}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=1):
+            for index in range(0, len(archive_payload), chunk_size):
+                yield archive_payload[index:index + chunk_size]
+
+    def fake_get(url, **kwargs):
+        assert url == "https://codeload.github.com/Kiramei/baas-dev/zip/refs/heads/master"
+        assert kwargs["stream"] is True
+        return FakeResponse()
+
+    monkeypatch.setenv("BAAS_ANDROID", "1")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(checks, "_github_api_get_latest_sha", lambda _source, _timeout: (True, new_sha))
+    monkeypatch.setattr(
+        checks,
+        "_android_archive_config",
+        lambda _data, _channel: {
+            "name": "github",
+            "url": "https://github.com/Kiramei/baas-dev.git",
+            "branch": "master",
+        },
+    )
+    monkeypatch.setattr(checks.requests, "get", fake_get)
+
+    events = []
+    result = checks.update_to_latest_with_progress(
+        setup_path,
+        progress=lambda stage, payload: events.append((stage, payload)),
+    )
+
+    assert result["status"] == "updated"
+    assert result["current"] == new_sha
+    assert (tmp_path / "service" / "new.py").read_text(encoding="utf-8") == "new"
+    assert not (tmp_path / "service" / "old.py").exists()
+    assert (tmp_path / "config" / "service_auth.json").read_text(encoding="utf-8") == "keep"
+    assert setup_path.read_text(encoding="utf-8").count(new_sha) == 1
+    assert [stage for stage, _payload in events] == [
+        "read_setup",
+        "fetch_sha",
+        "remote_sha",
+        "download_start",
+        "download_done",
+        "extract_start",
+        "copy_start",
+        "copy_done",
+        "write_setup",
+        "done",
+    ]

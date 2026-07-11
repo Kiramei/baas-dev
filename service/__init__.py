@@ -1,4 +1,5 @@
 def set_log_format():
+    """Install the rich console formatter used by service-mode startup logs."""
     import logging
     from datetime import datetime
     from rich.console import Console
@@ -46,6 +47,8 @@ def set_log_format():
 
 
 import warnings
+import os
+import sys
 
 # Suppress warning from adbutils
 warnings.filterwarnings(
@@ -56,8 +59,34 @@ warnings.filterwarnings(
 
 from .injection import prepare_service_imports
 
-prepare_service_imports()
 
-from .app import app, context
+def _shared_memory_transport_requested() -> bool:
+    if os.getenv("BAAS_SERVICE_TRANSPORT", "").strip().lower() == "shm":
+        return True
+    argv = list(sys.argv[1:])
+    for index, value in enumerate(argv):
+        if value == "--transport" and index + 1 < len(argv) and argv[index + 1] == "shm":
+            return True
+        if value == "--transport=shm":
+            return True
+    return False
 
-__all__ = ['app', 'context', 'set_log_format']
+
+if not _shared_memory_transport_requested():
+    prepare_service_imports()
+
+
+def __getattr__(name):
+    """Load service application objects only when callers explicitly request them."""
+    if name in {"app", "context"}:
+        from .app import app, context
+
+        values = {
+            "app": app,
+            "context": context,
+        }
+        return values[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["app", "context", "set_log_format"]

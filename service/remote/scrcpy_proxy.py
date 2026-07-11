@@ -33,6 +33,17 @@ class ScrcpyProxySession:
             await self.client.init()
         await self.client.proxy_websocket(websocket)
 
+    async def run_endpoint(self, endpoint) -> None:
+        """Proxy decrypted endpoint bytes to scrcpy and encrypt via the endpoint adapter."""
+        self.client.set_proxy_callbacks(None, None)
+        if not self.client.alive:
+            await self.client.init()
+        proxy_endpoint = getattr(self.client, "proxy_endpoint", None)
+        if callable(proxy_endpoint):
+            await proxy_endpoint(endpoint)
+            return
+        await self.client.proxy_websocket(endpoint)
+
     async def close(self) -> None:
         """Clear callbacks and stop the scrcpy client if the proxy is still alive."""
         self.client.set_proxy_callbacks(None, None)

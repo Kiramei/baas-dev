@@ -504,6 +504,48 @@ class ScrcpyClient:
 
             await websocket.send_bytes(payload)
 
+    async def __endpoint_to_adb(self, endpoint) -> None:
+        if self.__remote_socket is None:
+            raise ConnectionError("Remote ADB TCP socket is not initialized")
+
+        while self.alive:
+            payload = await endpoint.recv_bytes()
+
+            if self.on_ws_to_adb is not None:
+                result = self.on_ws_to_adb(payload)
+                if inspect.isawaitable(result):
+                    result = await result
+                payload = result
+
+            if payload is None:
+                continue
+
+            await self.__remote_socket.send(payload)
+
+    async def __adb_to_endpoint(self, endpoint) -> None:
+        if self.__remote_socket is None:
+            raise ConnectionError("Remote ADB TCP socket is not initialized")
+
+        while self.alive:
+            payload = await self.__remote_socket.recv()
+
+            if not payload:
+                break
+
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
+
+            if self.on_adb_to_ws is not None:
+                result = self.on_adb_to_ws(payload)
+                if inspect.isawaitable(result):
+                    result = await result
+                payload = result
+
+            if payload is None:
+                continue
+
+            await endpoint.send_bytes(payload)
+
     async def proxy_websocket(self, websocket) -> None:
         """
         Proxy one accepted FastAPI/Starlette WebSocket to device tcp:8886.
@@ -519,6 +561,43 @@ class ScrcpyClient:
         tasks = [
             asyncio.create_task(self.__adb_to_websocket(websocket)),
             asyncio.create_task(self.__websocket_to_adb(websocket)),
+        ]
+
+        try:
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+
+            for task in pending:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            for task in done:
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
+
+        finally:
+            self.alive = False
+            await self.__send_to_listeners(EVENT_DISCONNECT)
+            await self.stop(kill_server=True)
+
+    async def proxy_endpoint(self, endpoint) -> None:
+        """Proxy one transport-neutral endpoint to device tcp:8886."""
+        if self.__remote_socket is None:
+            raise RuntimeError("ScrcpyClient is not initialized. Call await init() first.")
+
+        self.alive = True
+
+        tasks = [
+            asyncio.create_task(self.__adb_to_endpoint(endpoint)),
+            asyncio.create_task(self.__endpoint_to_adb(endpoint)),
         ]
 
         try:

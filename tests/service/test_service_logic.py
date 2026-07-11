@@ -6,6 +6,7 @@ import os
 import shutil
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from watchfiles import Change
 
@@ -181,6 +182,18 @@ def test_android_config_patch_cannot_change_local_device_methods(monkeypatch, tm
 
     assert updated.data["control_method"] == "android_local"
     assert updated.data["screenshot_method"] == "android_local"
+
+
+def test_service_runtime_init_all_data_returns_backend_status(monkeypatch, tmp_path):
+    async def scenario():
+        runtime = ServiceRuntime(tmp_path)
+        runtime.set_loop(asyncio.get_running_loop())
+        runtime._main = SimpleNamespace(init_all_data=lambda need_ocr_update_check=True: True)
+        monkeypatch.setattr(runtime, "_ensure_config", lambda: None)
+
+        return runtime.init_all_data(), runtime.is_all_data_initialized
+
+    assert asyncio.run(scenario()) == (True, True)
 
 
 def test_service_runtime_streams_sha_results_by_completion(monkeypatch, tmp_path):

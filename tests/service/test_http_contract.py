@@ -37,16 +37,28 @@ class _AuthManager:
 
 
 class _Runtime:
+    def __init__(self) -> None:
+        self.solve_calls = []
+
     def current_status(self):
         return {"default_config": {"running": False}}
 
+    async def solve_task(self, config_id, task, set_log=None):
+        self.solve_calls.append((config_id, task, bool(set_log)))
+        return {"status": "ok", "task": task, "result": 0}
+
 
 def _client(monkeypatch, auth_manager: _AuthManager) -> TestClient:
-    fake_context = SimpleNamespace(auth_manager=auth_manager, runtime=_Runtime())
+    runtime = _Runtime()
+    fake_context = SimpleNamespace(
+        auth_manager=auth_manager,
+        runtime=runtime,
+        ensure_runtime_logger_attached=lambda: None,
+    )
     monkeypatch.setattr(http, "context", fake_context)
     app = FastAPI()
     app.include_router(http.router)
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
 
 
 def test_health_contract(monkeypatch):
@@ -94,3 +106,27 @@ def test_logout_deletes_cookie(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert "baas_remember=" in response.headers["set-cookie"]
+
+
+def test_android_solve_contract(monkeypatch):
+    monkeypatch.setenv("BAAS_ANDROID", "1")
+    client = _client(monkeypatch, _AuthManager())
+
+    response = client.post("/android/solve", json={"config_id": "default_config", "task": "cafe_reward"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "data": {"status": "ok", "task": "cafe_reward", "result": 0},
+    }
+    assert http.context.runtime.solve_calls == [("default_config", "cafe_reward", True)]
+
+
+def test_android_solve_requires_task(monkeypatch):
+    monkeypatch.setenv("BAAS_ANDROID", "1")
+    client = _client(monkeypatch, _AuthManager())
+
+    response = client.post("/android/solve", json={"config_id": "default_config"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "task is required"

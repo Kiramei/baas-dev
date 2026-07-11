@@ -11,7 +11,6 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
-from .auth import ServiceAuthManager
 from .conf.manager import ConfigManager
 from .utils.logging import LogManager
 from .runtime import ServiceRuntime
@@ -24,6 +23,10 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _is_android_runtime() -> bool:
+    return os.getenv("BAAS_ANDROID", "").lower() in {"1", "true", "yes", "on"}
 
 
 def _setup_no_update(project_root: Path) -> bool:
@@ -47,9 +50,9 @@ def _setup_no_update(project_root: Path) -> bool:
 class ServiceContext:
     """Aggregates long-lived service components."""
 
-    def __init__(self, project_root: Path) -> None:
+    def __init__(self, project_root: Path, *, enable_auth: bool = True) -> None:
         self.project_root = project_root
-        self.auth_manager = ServiceAuthManager(project_root)
+        self.auth_manager = self._create_auth_manager(project_root) if enable_auth else None
         self.config_manager = ConfigManager(project_root)
         self.runtime = ServiceRuntime(project_root)
         self.log_manager = LogManager()
@@ -59,12 +62,33 @@ class ServiceContext:
         self.no_update = _setup_no_update(project_root)
         self.need_ocr_update_check = _env_bool(OCR_UPDATE_CHECK_ENV, True) and not self.no_update
 
+    @staticmethod
+    def _create_auth_manager(project_root: Path):
+        from .auth import ServiceAuthManager
+
+        return ServiceAuthManager(project_root)
+
     async def startup(self) -> None:
         loop = asyncio.get_running_loop()
         self._loop = loop
         self.config_manager.set_loop(loop)
         self.runtime.set_loop(loop)
         self.log_manager.set_loop(loop)
+
+        if _is_android_runtime():
+            await self.log_manager.start()
+            self._fs_task = asyncio.create_task(self.config_manager.watch_filesystem(), name="config-fs-watch")
+            if not self.no_update:
+                self._update_check_task = asyncio.create_task(
+                    self._periodic_update_check(),
+                    name="periodic-update-check",
+                )
+            threading.Thread(
+                target=self._initialize_runtime_in_background,
+                name="service-android-runtime-init",
+                daemon=True,
+            ).start()
+            return
 
         await self.runtime.ensure_ready()  # ensures OCR server is ready
         main_queue = self.runtime.get_main_log_queue()
@@ -84,6 +108,15 @@ class ServiceContext:
             daemon=True,
         ).start()
 
+    def _initialize_runtime_in_background(self) -> None:
+        """Initializes Android runtime data without blocking HTTP/WebSocket startup."""
+        try:
+            main_queue = self.runtime.get_main_log_queue()
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self.log_manager.register_queue, main_queue, "global")
+            self.runtime.init_all_data(need_ocr_update_check=self.need_ocr_update_check)
+        except Exception:
+            pass
 
     async def shutdown(self) -> None:
         if self._fs_task:

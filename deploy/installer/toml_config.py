@@ -1,5 +1,9 @@
 import os
-import tomli_w
+
+try:
+    import tomli_w
+except ModuleNotFoundError:
+    tomli_w = None
 
 DEFAULT_SETTINGS = {
     "General": {
@@ -116,7 +120,7 @@ class TOML_Config:
 
     def save(self):
         with open(self.config_path, 'wb') as f:
-            tomli_w.dump(self.config, f)
+            dump_toml(self.config, f)
 
     def add_signal(self, key, signal):
         self.signals[key] = signal
@@ -129,3 +133,40 @@ class TOML_Config:
 
     def set_signals(self, signals):
         self.signals = signals
+
+
+def dump_toml(data, file):
+    if tomli_w is not None:
+        tomli_w.dump(data, file)
+        return
+    file.write(_fallback_toml(data).encode("utf-8"))
+
+
+def _fallback_toml(data):
+    lines = []
+    scalar_items = {key: value for key, value in data.items() if not isinstance(value, dict)}
+    for key, value in scalar_items.items():
+        lines.append(f"{key} = {_toml_value(value)}")
+    for section, values in data.items():
+        if not isinstance(values, dict):
+            continue
+        if lines:
+            lines.append("")
+        lines.append(f"[{section}]")
+        for key, value in values.items():
+            if isinstance(value, dict):
+                continue
+            lines.append(f"{key} = {_toml_value(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def _toml_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if value is None:
+        return '""'
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'

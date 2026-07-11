@@ -1,0 +1,91 @@
+name: Transport Validation
+
+on:
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - "main.service.py"
+      - "service/transport/**"
+      - "service/channels/**"
+      - "service/api/ws_*.py"
+      - "service/runtime.py"
+      - "service/context.py"
+      - "service/auth/**"
+      - "service/types.py"
+      - "scripts/benchmark_transport.py"
+      - "tests/service/**"
+      - ".github/workflows/transport.yml"
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "main.service.py"
+      - "service/transport/**"
+      - "service/channels/**"
+      - "service/api/ws_*.py"
+      - "service/runtime.py"
+      - "service/context.py"
+      - "service/auth/**"
+      - "service/types.py"
+      - "scripts/benchmark_transport.py"
+      - "tests/service/**"
+      - ".github/workflows/transport.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-transport:
+    name: Python transport (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install transport test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest fastapi cryptography PyNaCl httpx pygit2 websockets watchfiles requests Pillow tomli_w retry adbutils uiautomator2 opencv-python-headless
+
+      - name: Compile service package
+        run: python -m compileall -q service
+
+      - name: Run transport-focused unit and integration tests
+        run: >
+          python -m unittest
+          tests.service.test_transport_protocol_unittest
+          tests.service.test_transport_ring_buffer_unittest
+          tests.service.test_transport_lanes_unittest
+          tests.service.test_shared_memory_endpoint_unittest
+          tests.service.test_shared_memory_server_native_unittest
+          tests.service.test_transport_launch_unittest
+          tests.service.test_channel_handlers_unittest
+
+      - name: Run shm transport benchmark smoke
+        run: >
+          python scripts/benchmark_transport.py
+          --latency-iterations 20
+          --binary-iterations 5
+          --large-binary-iterations 2
+          --message-burst-count 50
+          --message-burst-payload-size 128
+          --startup-iterations 1
+          --idle-seconds 1
+          --remote-stress-frames 10
+          --remote-stress-frame-size 4096
+          --json

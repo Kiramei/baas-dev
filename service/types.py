@@ -2,7 +2,44 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, root_validator, validator
+try:
+    from pydantic import BaseModel, Field, root_validator, validator
+except ModuleNotFoundError:
+    class BaseModel:
+        def __init__(self, **kwargs):
+            annotations = getattr(self, "__annotations__", {})
+            for key, value in self.__class__.__dict__.items():
+                if key.startswith("_") or callable(value):
+                    continue
+                if key not in kwargs and key in annotations:
+                    setattr(self, key, value)
+            for key in annotations:
+                if key in kwargs:
+                    setattr(self, key, kwargs[key])
+
+        def dict(self, *args, **kwargs):
+            return {
+                key: getattr(self, key)
+                for key in getattr(self, "__annotations__", {})
+                if hasattr(self, key)
+            }
+
+    def Field(default=None, *, default_factory=None, **_kwargs):
+        if default_factory is not None:
+            return default_factory()
+        return default
+
+    def root_validator(*_args, **_kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+    def validator(*_args, **_kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
 
 
 class ServiceBaseModel(BaseModel):

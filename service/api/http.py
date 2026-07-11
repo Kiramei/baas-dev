@@ -78,6 +78,19 @@ async def android_active_config(request: Request, payload: dict[str, Any]) -> Di
     return context.runtime.set_android_active_config(config_id)
 
 
+@router.post("/android/reset-auth")
+async def android_reset_auth(request: Request, payload: dict[str, Any]) -> Dict[str, Any]:
+    _require_android_loopback(request)
+    password = str(payload.get("password") or "").strip()
+    if not password:
+        raise HTTPException(status_code=400, detail="password is required")
+    state = await context.auth_manager.force_reset_password(
+        password,
+        reason="android_auto_password_reset",
+    )
+    return {"ok": True, "pwd_epoch": state.pwd_epoch}
+
+
 @router.post("/android/toggle")
 async def android_toggle(request: Request) -> Dict[str, Any]:
     _require_android_loopback(request)
@@ -85,6 +98,24 @@ async def android_toggle(request: Request) -> Dict[str, Any]:
         return await context.runtime.toggle_android_active_config(
             set_log=context.ensure_runtime_logger_attached
         )
+    except Exception as exc:
+        return {"status": "error", "type": exc.__class__.__name__, "error": str(exc)}
+
+
+@router.post("/android/solve")
+async def android_solve(request: Request, payload: dict[str, Any]) -> Dict[str, Any]:
+    _require_android_loopback(request)
+    config_id = str(payload.get("config_id") or "default_config").strip()
+    task = str(payload.get("task") or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="task is required")
+    try:
+        data = await context.runtime.solve_task(
+            config_id,
+            task,
+            set_log=context.ensure_runtime_logger_attached,
+        )
+        return {"status": "ok", "data": data}
     except Exception as exc:
         return {"status": "error", "type": exc.__class__.__name__, "error": str(exc)}
 

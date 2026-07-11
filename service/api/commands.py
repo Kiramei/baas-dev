@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 from service.types import CommandMessage
@@ -14,6 +15,16 @@ def _require_config_id(cmd: CommandMessage) -> str:
 
 
 async def execute_command(cmd: CommandMessage, binary_payload: bytes | None = None) -> Dict[str, Any]:
+    if os.environ.get("BAAS_SHM_TEST_COMMANDS") == "1":
+        if cmd.command == "import_config":
+            if binary_payload is None:
+                raise ValueError("binary archive payload is required for import_config")
+            return {"status": "ok", "data": {"received_binary_size": len(binary_payload)}}
+
+        if cmd.command == "export_config":
+            content = cmd.payload.get("content", "shm-test-binary").encode("utf-8")
+            return {"status": "ok", "data": {"name": "transport-test"}, "_binary": content}
+
     if cmd.command == "start_scheduler":
         if not cmd.config_id:
             raise ValueError("config_id is required for start_scheduler")

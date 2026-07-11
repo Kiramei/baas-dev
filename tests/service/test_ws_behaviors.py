@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from service.api import ws_provider, ws_remote, ws_sync
+from service.transport.in_memory_endpoint import InMemoryChannelEndpoint
 
 
 class _Stream:
@@ -78,18 +79,19 @@ def test_remote_proxy_initializes_and_cleans_client(monkeypatch):
     async def fake_resume(websocket, *, channel):
         return SimpleNamespace(), _Stream()
 
-    async def fake_recv(websocket, stream):
-        return {"config_id": "default_config", "decrypt": True}
-
     async def fake_require_remote(config_id):
         assert config_id == "default_config"
         return client
 
     monkeypatch.setattr(ws_remote, "perform_business_resume", fake_resume)
-    monkeypatch.setattr(ws_remote, "recv_stream_json", fake_recv)
     monkeypatch.setattr(ws_remote, "context", SimpleNamespace(runtime=SimpleNamespace(require_remote_=fake_require_remote)))
 
-    asyncio.run(ws_remote.websocket_remote(SimpleNamespace()))
+    websocket = SimpleNamespace()
+    endpoint = InMemoryChannelEndpoint()
+    asyncio.run(endpoint.queue_json({"config_id": "default_config", "decrypt": True}))
+    monkeypatch.setattr(ws_remote, "WebSocketChannelEndpoint", lambda websocket, stream: endpoint)
+
+    asyncio.run(ws_remote.websocket_remote(websocket))
 
     assert client.initialized is True
     assert client.proxied is True

@@ -5,11 +5,22 @@ import uiautomator2 as u2
 import cv2
 import numpy as np
 import requests
-from uiautomator2.version import (__apk_version__, __atx_agent_version__, __version__)
+from uiautomator2.version import __apk_version__, __version__
+try:
+    from uiautomator2.version import __atx_agent_version__
+except ImportError:
+    __atx_agent_version__ = ""
 import os
 import json
 
 appdir = os.path.join(os.path.expanduser("~"), '.uiautomator2')
+if not __atx_agent_version__:
+    for entry in os.listdir(os.path.abspath("src/atx_app")):
+        if entry.startswith("atx-agent_") and "_linux_" in entry:
+            __atx_agent_version__ = entry.removeprefix("atx-agent_").split("_linux_", 1)[0]
+            break
+if not __atx_agent_version__:
+    __atx_agent_version__ = "0.10.0"
 
 GITHUB_BASEURL = "https://github.com/openatx"
 

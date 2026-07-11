@@ -6,15 +6,24 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from watchfiles import Change, awatch
+try:
+    from watchfiles import Change, awatch
+except ModuleNotFoundError:
+    class Change(Enum):
+        added = 1
+        modified = 2
+        deleted = 3
+
+    awatch = None
 
 from deploy.installer.const import normalize_update_channel
 from service.types import PatchOperation, SyncPushPayload
 from service.android_modes import ANDROID_LOCAL_METHOD
-from service.update import read_setup_toml, write_setup_toml
+from service.update.setup_io import read_setup_toml, write_setup_toml
 from service.update.setup_schema import legacy_repo_url, migrate_to_current_schema
 from service.utils.broadcast import BroadcastChannel
 from service.utils.diff import PatchConflictError, apply_patch, diff_documents
@@ -485,6 +494,10 @@ class ConfigManager:
         setup_toml = self._root / "setup.toml"
         if setup_toml.exists():
             watch_paths.append(setup_toml)
+
+        if awatch is None:
+            while True:
+                await asyncio.sleep(3600)
 
         try:
             async for changes in awatch(*watch_paths, recursive=True):

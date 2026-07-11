@@ -68,7 +68,7 @@ def _android_ocr_branch() -> Optional[str]:
     if os.getenv("BAAS_ANDROID", "").lower() not in {"1", "true", "yes", "on"}:
         return None
     arch = platform.machine().lower()
-    if arch in {"aarch64", "arm64"}:
+    if arch in {"aarch64", "arm64", "arm64-v8a", "armv8", "armv8l"}:
         return "android-arm64-v8a"
     if arch in {"x86_64", "amd64"}:
         return "android-x86_64"
@@ -95,6 +95,8 @@ def _server_folder_path() -> str:
     base = os.path.dirname(__file__)
     android_branch = _android_ocr_branch()
     if android_branch:
+        project_root = os.path.dirname(base)
+        base = os.path.join(project_root, "core", "ocr", "baas_ocr_client")
         return os.path.join(base, "bin-android", android_branch)
     return os.path.join(base, "bin")
 

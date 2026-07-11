@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 import os
-import pygit2
 import shutil
 import subprocess
 import tempfile
@@ -14,7 +13,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
-from pygit2.enums import ResetMode
+
+try:
+    import pygit2
+    from pygit2.enums import ResetMode
+except ModuleNotFoundError:
+    pygit2 = None
+
+    class ResetMode:
+        HARD = None
 
 import requests
 
@@ -671,6 +678,18 @@ def _android_update_to_latest(
     if not ok or not remote_sha:
         raise RuntimeError(f"Failed to fetch Android update SHA: {remote_sha}")
     emit("remote_sha", sha=remote_sha)
+
+    local_sha = str(data["general"].get("current_baas_sha") or "").strip()
+    if local_sha and local_sha == remote_sha:
+        emit("skipped", reason="latest", sha=remote_sha)
+        return {
+            "status": "skipped",
+            "reason": "latest",
+            "current": remote_sha,
+            "restart_required": False,
+            "method": archive_source.get("name") or "github-archive",
+            "channel": channel,
+        }
 
     archive_url = _github_archive_url_for_config(archive_source)
     if not archive_url:

@@ -7,6 +7,7 @@ import pytest
 
 from service.api import security
 from service.auth import AuthenticationError, JsonChaChaChannel, b64e
+from service.transport.websocket_endpoint import WebSocketChannelEndpoint
 
 
 class _PasswordState:
@@ -41,16 +42,35 @@ class _AuthManager:
             SimpleNamespace(name="control-channel"),
         )
 
+    def resume_business_session(self, *, handshake, session_id, socket_id, channel, resume_ticket, resume_mac):
+        self.resumed_business = {
+            "handshake": handshake,
+            "session_id": session_id,
+            "socket_id": socket_id,
+            "channel": channel,
+            "resume_ticket": resume_ticket,
+            "resume_mac": resume_mac,
+        }
+        return (
+            SimpleNamespace(session_id=session_id, expires_at=123.0, pwd_epoch=1),
+            _PreauthChannel(decrypted={"type": "stream_ready", "client_header": b64e(b"client-header")}),
+            _Stream(tx_header=b"server-header"),
+        )
+
 
 class _PreauthChannel:
     def __init__(self, decrypted=None) -> None:
         self._decrypted = decrypted or {}
+        self.rx_seq = 0
 
     def encrypt(self, payload):
         return {"encrypted": payload}
 
     def decrypt(self, payload):
         return self._decrypted if payload == "next" else payload
+
+    def set_rx_seq(self, value: int) -> None:
+        self.rx_seq = value
 
 
 class _WebSocket:
@@ -67,11 +87,18 @@ class _WebSocket:
 
 
 class _Stream:
+    def __init__(self, *, tx_header: bytes = b"") -> None:
+        self.tx_header = tx_header
+        self.rx_header = None
+
     def encrypt(self, data: bytes) -> bytes:
         return b"enc:" + data
 
     def decrypt(self, data: bytes) -> bytes:
         return data.removeprefix(b"enc:")
+
+    def init_pull(self, header: bytes) -> None:
+        self.rx_header = header
 
 
 class _StreamWebSocket:
@@ -105,6 +132,26 @@ def test_stream_json_uses_binary_frames():
 
     assert websocket.sent == [b'enc:{"type":"pong"}']
     assert payload == {"type": "ping"}
+
+
+def test_websocket_endpoint_encrypts_json_and_bytes():
+    async def scenario():
+        websocket = _StreamWebSocket(b'enc:{"type":"ping"}')
+        endpoint = WebSocketChannelEndpoint(websocket, _Stream())
+
+        inbound_json = await endpoint.recv_json()
+        await endpoint.send_json({"type": "pong"})
+        await endpoint.send_bytes(b"binary")
+
+        websocket.inbound = b"enc:raw"
+        inbound_bytes = await endpoint.recv_bytes()
+        return inbound_json, inbound_bytes, websocket.sent
+
+    inbound_json, inbound_bytes, sent = asyncio.run(scenario())
+
+    assert inbound_json == {"type": "ping"}
+    assert inbound_bytes == b"raw"
+    assert sent == [b'enc:{"type":"pong"}', b"enc:binary"]
 
 
 def test_json_chacha_channel_round_trip():
@@ -159,3 +206,52 @@ def test_business_resume_requires_resume_proof(monkeypatch):
 
     with pytest.raises(AuthenticationError, match="Resume proof"):
         asyncio.run(security.perform_business_resume(_WebSocket(), channel="sync"))
+
+
+def test_business_resume_success_requires_secure_ready(monkeypatch):
+    auth_manager = _AuthManager()
+    websocket = _WebSocket()
+    websocket.received_json.extend(
+        [
+            {"type": "resume_proof", "resume_mac": b64e(b"mac")},
+            "next",
+        ]
+    )
+
+    async def fake_begin_server_hello(websocket, *, kind, channel):
+        return (
+            SimpleNamespace(name="handshake"),
+            _PreauthChannel(),
+            {
+                "channel": "sync",
+                "session_id": "session-1",
+                "socket_id": "socket-1",
+                "resume_ticket": "ticket-1",
+            },
+        )
+
+    monkeypatch.setattr(security, "context", SimpleNamespace(auth_manager=auth_manager))
+    monkeypatch.setattr(security, "begin_server_hello", fake_begin_server_hello)
+
+    session, stream = asyncio.run(security.perform_business_resume(websocket, channel="sync"))
+
+    assert session.session_id == "session-1"
+    assert stream.rx_header == b"client-header"
+    assert auth_manager.resumed_business == {
+        "handshake": SimpleNamespace(name="handshake"),
+        "session_id": "session-1",
+        "socket_id": "socket-1",
+        "channel": "sync",
+        "resume_ticket": "ticket-1",
+        "resume_mac": b"mac",
+    }
+    assert websocket.sent_json == [
+        {
+            "encrypted": {
+                "type": "resume_ok",
+                "session_id": "session-1",
+                "pwd_epoch": 1,
+                "server_header": b64e(b"server-header"),
+            }
+        }
+    ]
