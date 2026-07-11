@@ -65,7 +65,7 @@ if _HAS_WINDOWS_NATIVE:
     _WAIT_TIMEOUT = 0x00000102
 elif _HAS_POSIX_NATIVE:
     _libc = ctypes.CDLL(ctypes.util.find_library("c") or None, use_errno=True)
-    _libc.shm_open.argtypes = (ctypes.c_char_p, ctypes.c_int, ctypes.c_uint)
+    _libc.shm_open.argtypes = (ctypes.c_char_p, ctypes.c_int)
     _libc.shm_open.restype = ctypes.c_int
     _libc.ftruncate.argtypes = (ctypes.c_int, ctypes.c_longlong)
     _libc.ftruncate.restype = ctypes.c_int
@@ -86,7 +86,7 @@ elif _HAS_POSIX_NATIVE:
     _libc.close.restype = ctypes.c_int
     _libc.shm_unlink.argtypes = (ctypes.c_char_p,)
     _libc.shm_unlink.restype = ctypes.c_int
-    _libc.sem_open.argtypes = (ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint)
+    _libc.sem_open.argtypes = (ctypes.c_char_p, ctypes.c_int)
     _libc.sem_open.restype = ctypes.c_void_p
     _libc.sem_post.argtypes = (ctypes.c_void_p,)
     _libc.sem_post.restype = ctypes.c_int
@@ -269,7 +269,7 @@ class PosixSharedMemoryRegion:
             fd = _libc.shm_open(name_bytes, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         if fd < 0:
             _raise_errno("shm_open")
-        if _libc.fchmod(fd, 0o600) != 0:
+        if sys.platform != "darwin" and _libc.fchmod(fd, 0o600) != 0:
             error = ctypes.get_errno()
             _libc.close(fd)
             _libc.shm_unlink(name_bytes)
@@ -288,7 +288,7 @@ class PosixSharedMemoryRegion:
         if size <= 0:
             raise NativeIpcError("shared-memory region size must be greater than zero")
         name_bytes = _posix_name(name)
-        fd = _libc.shm_open(name_bytes, os.O_RDWR, 0o600)
+        fd = _libc.shm_open(name_bytes, os.O_RDWR)
         if fd < 0:
             _raise_errno("shm_open")
         return cls._map_fd(name, size, fd, owner=False)
@@ -356,7 +356,7 @@ class PosixNotificationEvent:
         if not _HAS_POSIX_NATIVE:
             raise NativeIpcError("native notification events are only implemented for Windows/Linux/macOS in this build")
         name_bytes = _posix_name(name)
-        sem = _libc.sem_open(name_bytes, 0, 0, 0)
+        sem = _libc.sem_open(name_bytes, 0)
         if sem == _SEM_FAILED:
             _raise_errno("sem_open")
         return cls(name=name, _sem=sem, _owner=False)

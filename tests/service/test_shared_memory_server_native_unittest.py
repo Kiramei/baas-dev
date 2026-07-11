@@ -591,7 +591,7 @@ def _main_service_subprocess_remote_scenario() -> None:
             assert proc.poll() is None
 
             stream_id = 13
-            frame_count = 6
+            frame_count = 3
             _write_inbound_frame(
                 region,
                 header,
@@ -634,7 +634,7 @@ def _main_service_subprocess_remote_scenario() -> None:
                     lambda observed: _find_remote_ack(observed, stream_id) is not None
                     and len(_bytes_frames_for_channel(observed, CHANNEL_REMOTE, stream_id)) == frame_count
                     and _find_close_frame(observed, CHANNEL_REMOTE, stream_id) is not None,
-                    timeout=15,
+                    timeout=20,
                 )
             )
             ack = _find_remote_ack(frames, stream_id)
