@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 from .base import ChannelClosed
@@ -18,7 +18,7 @@ from .protocol import (
     FrameHeader,
     logical_channel_name,
 )
-from .ring_buffer import NotEnoughData, QueueFull, SharedRingBuffer
+from .ring_buffer import NotEnoughData, QueueFull, SharedRegionRingBuffer, SharedRingBuffer
 
 _CLOSE = object()
 
@@ -34,31 +34,30 @@ class SharedMemoryRingWriter:
     length: int
     notify_event: Optional[object] = None
     sequence_number: int = 1
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def write(self, channel_id: int, stream_id: int, message_kind: int, payload: bytes) -> None:
-        frame = EncodedFrame(
-            header=FrameHeader(
-                frame_version=1,
-                logical_channel_id=channel_id,
-                stream_id=stream_id,
-                message_kind=message_kind,
-                flags=0,
-                sequence_number=self.sequence_number,
-                correlation_id=0,
-                payload_length=len(payload),
-                fragment_index=0,
-                fragment_count=1,
-            ),
-            payload=payload,
-        )
-        self.sequence_number = (self.sequence_number + 1) & 0xFFFFFFFFFFFFFFFF or 1
-        before = bytearray(self.region.read(self.offset, self.length))
-        raw_ring = bytearray(before)
-        ring = SharedRingBuffer(raw_ring)
-        write_frame_with_lane_policy(ring, frame)
-        write_changed_ranges(self.region, self.offset, before, raw_ring)
-        if self.notify_event is not None:
-            await asyncio.to_thread(self.notify_event.set)
+        async with self._lock:
+            frame = EncodedFrame(
+                header=FrameHeader(
+                    frame_version=1,
+                    logical_channel_id=channel_id,
+                    stream_id=stream_id,
+                    message_kind=message_kind,
+                    flags=0,
+                    sequence_number=self.sequence_number,
+                    correlation_id=0,
+                    payload_length=len(payload),
+                    fragment_index=0,
+                    fragment_count=1,
+                ),
+                payload=payload,
+            )
+            self.sequence_number = (self.sequence_number + 1) & 0xFFFFFFFFFFFFFFFF or 1
+            ring = SharedRegionRingBuffer(self.region, self.offset, self.length)
+            write_frame_with_lane_policy(ring, frame)
+            if self.notify_event is not None:
+                await asyncio.to_thread(self.notify_event.set)
 
 
 class SharedMemoryChannelEndpoint:
@@ -187,19 +186,13 @@ class SharedMemoryChannelMux:
 
 
 def write_frame_to_region(region: object, offset: int, length: int, frame: EncodedFrame) -> None:
-    before = bytearray(region.read(offset, length))
-    raw_ring = bytearray(before)
-    ring = SharedRingBuffer(raw_ring)
+    ring = SharedRegionRingBuffer(region, offset, length)
     ring.write_frame(frame)
-    write_changed_ranges(region, offset, before, raw_ring)
 
 
 def read_frame_from_region(region: object, offset: int, length: int) -> EncodedFrame:
-    before = bytearray(region.read(offset, length))
-    raw_ring = bytearray(before)
-    ring = SharedRingBuffer(raw_ring)
+    ring = SharedRegionRingBuffer(region, offset, length)
     frame = ring.read_frame(MAX_FRAME_LENGTH)
-    write_changed_ranges(region, offset, before, raw_ring)
     return frame
 
 
@@ -222,7 +215,7 @@ def write_changed_ranges(region: object, base_offset: int, before: bytearray, af
         region.write(base_offset + start, bytes(after[start:end]))
 
 
-def write_frame_with_lane_policy(ring: SharedRingBuffer, frame: EncodedFrame) -> None:
+def write_frame_with_lane_policy(ring: SharedRingBuffer | SharedRegionRingBuffer, frame: EncodedFrame) -> None:
     lane = lane_for_frame(frame.header.logical_channel_id, frame.header.message_kind)
     policy = LanePolicy.for_lane(lane)
     while True:
@@ -236,7 +229,7 @@ def write_frame_with_lane_policy(ring: SharedRingBuffer, frame: EncodedFrame) ->
                 raise
 
 
-def drop_oldest_frame_for_lane(ring: SharedRingBuffer, lane: IpcLane) -> bool:
+def drop_oldest_frame_for_lane(ring: SharedRingBuffer | SharedRegionRingBuffer, lane: IpcLane) -> bool:
     try:
         oldest = ring.peek_frame(MAX_FRAME_LENGTH)
     except NotEnoughData:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -194,6 +195,50 @@ def test_service_runtime_init_all_data_returns_backend_status(monkeypatch, tmp_p
         return runtime.init_all_data(), runtime.is_all_data_initialized
 
     assert asyncio.run(scenario()) == (True, True)
+
+
+def test_start_scheduler_ack_does_not_wait_for_session_initialization(monkeypatch, tmp_path):
+    started = threading.Event()
+
+    class FakeLogger:
+        log_collector = None
+
+        def error(self, _message):
+            pass
+
+    class FakeBaas:
+        logger = FakeLogger()
+        flag_run = False
+
+        @staticmethod
+        def init_all_data():
+            return True
+
+        def send(self, command):
+            assert command == "start"
+            started.set()
+
+    session = SimpleNamespace(baas=FakeBaas(), thread=None)
+    runtime = ServiceRuntime(tmp_path)
+    monkeypatch.setattr(runtime._android_display_guard, "activate", lambda _logger: None)
+    monkeypatch.setattr(runtime._android_display_guard, "release", lambda _logger: None)
+
+    def slow_session(_config_id):
+        time.sleep(0.2)
+        runtime._sessions["default_config"] = session
+        return session
+
+    monkeypatch.setattr(runtime, "_get_or_create_session", slow_session)
+
+    async def scenario():
+        begin = time.perf_counter()
+        result = await runtime.start_scheduler("default_config")
+        return result, time.perf_counter() - begin
+
+    result, elapsed = asyncio.run(scenario())
+    assert result == {"status": "started", "config_id": "default_config"}
+    assert elapsed < 0.1
+    assert started.wait(1.0)
 
 
 def test_service_runtime_streams_sha_results_by_completion(monkeypatch, tmp_path):

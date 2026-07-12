@@ -338,8 +338,29 @@ class ChannelHandlerTests(unittest.TestCase):
         self.assertTrue(client.initialized)
         self.assertTrue(client.stopped)
         self.assertEqual(client.callbacks[-1], (None, None))
-        self.assertEqual(sent[0], ("json", {"type": "remote_ack", "size": 3}))
-        self.assertEqual(sent[1], ("bytes", b"video"))
+        self.assertEqual(sent[0], ("json", {"type": "remote_status", "message": "Initializing remote connection..."}))
+        self.assertEqual(sent[1], ("json", {"type": "remote_ack", "size": 3}))
+        self.assertEqual(sent[2], ("bytes", b"video"))
+
+    def test_remote_handler_reports_initialization_errors(self) -> None:
+        class FailingRemoteRuntime(FakeRuntime):
+            async def require_remote_(self, config_id):
+                raise RuntimeError(f"cannot connect {config_id}")
+
+        async def scenario():
+            endpoint = InMemoryChannelEndpoint()
+            await endpoint.queue_json({"config_id": "default_config"})
+
+            await RemoteChannelHandler(SimpleNamespace(runtime=FailingRemoteRuntime())).handle(endpoint)
+            return endpoint.sent
+
+        sent = asyncio.run(scenario())
+
+        self.assertEqual(sent[0], ("json", {"type": "remote_status", "message": "Initializing remote connection..."}))
+        self.assertEqual(
+            sent[1],
+            ("json", {"type": "remote_error", "error": "cannot connect default_config"}),
+        )
 
     def test_remote_transport_test_supports_configurable_frame_size(self) -> None:
         async def scenario():

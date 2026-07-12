@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
-from service.transport import ChannelEndpoint
+from service.transport import ChannelClosed, ChannelEndpoint
+
+REMOTE_CONNECT_TIMEOUT_SECONDS = float(os.getenv("BAAS_REMOTE_CONNECT_TIMEOUT_SECONDS", "20"))
 
 
 class RemoteChannelHandler:
@@ -29,11 +32,32 @@ class RemoteChannelHandler:
                 await endpoint.close()
                 return
 
-            client = await self.context.runtime.require_remote_(config_id)
+            await endpoint.send_json({"type": "remote_status", "message": "Initializing remote connection..."})
+            try:
+                client = await asyncio.wait_for(
+                    self.context.runtime.require_remote_(config_id),
+                    timeout=REMOTE_CONNECT_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                await endpoint.send_json(
+                    {
+                        "type": "remote_error",
+                        "error": (
+                            "Remote connection timed out. Check that the emulator/device is running "
+                            "and ADB is reachable."
+                        ),
+                    }
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - surface device initialization errors to frontend
+                await endpoint.send_json({"type": "remote_error", "error": str(exc)})
+                return
             from service.remote import ScrcpyProxySession
 
             proxy = ScrcpyProxySession(client, None, encrypt_adb_to_ws=False)
             await proxy.run_endpoint(endpoint)
+        except ChannelClosed:
+            return
         finally:
             if proxy is not None:
                 await proxy.close()

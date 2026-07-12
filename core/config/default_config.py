@@ -3561,7 +3561,7 @@ STATIC_DEFAULT_CONFIG = '''
     },
     "activity_name": {
         "官服": "com.yostar.sdk.bridge.YoStarUnityPlayerActivity",
-        "B服": "com.yostar.sdk.bridge.YoStarUnityPlayerActivity",
+        "B服": "com.yostar.supersdk.activity.YoStarSplashActivity",
         "国际服": ".MxUnityPlayerActivity",
         "国际服青少年": ".MxUnityPlayerActivity",
         "韩国ONE": ".MxUnityPlayerActivity",

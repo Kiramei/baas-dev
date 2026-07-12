@@ -328,19 +328,14 @@ class ScrcpyClient:
 
         start_task = asyncio.create_task(start_server())
         ready_task = asyncio.create_task(wait_server_ready())
-
-        done, pending = await asyncio.wait(
-            [start_task, ready_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        for task in pending:
-            task.cancel()
-
-        for task in pending:
+        try:
+            await ready_task
+        finally:
+            if not start_task.done():
+                start_task.cancel()
             try:
-                await task
-            except asyncio.CancelledError:
+                await start_task
+            except (asyncio.CancelledError, AdbTimeout):
                 pass
 
     # -----------------------------------------------------------------------
@@ -358,6 +353,8 @@ class ScrcpyClient:
 
                 def _filter_func(x: ForwardItem):
                     return (
+                        x.serial == self.device.serial
+                        and
                         x.remote == remote
                         and x.local.startswith("tcp:")
                     )
@@ -382,9 +379,9 @@ class ScrcpyClient:
                 self.control_socket = self.__remote_socket
                 return
 
-            except AdbError as exc:
+            except Exception as exc:
                 last_error = exc
-                sleep(0.1)
+                await asyncio.sleep(0.1)
 
         raise ConnectionError(
             f"Failed to connect ws-scrcpy server at tcp:{SCRCPY_SERVER_PORT} "

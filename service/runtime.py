@@ -268,6 +268,8 @@ class ServiceRuntime:
         self._status_lock = threading.Lock()
         self._sessions: Dict[str, ConfigSession] = {}
         self._statuses: Dict[str, Dict[str, Any]] = {}
+        self._scheduler_threads: Dict[str, threading.Thread] = {}
+        self._scheduler_cancel_events: Dict[str, threading.Event] = {}
         self._lock: Optional[asyncio.Lock] = None
         self._main: Optional["Main"] = None
         self._baas: Optional["Baas_thread"] = None
@@ -444,74 +446,73 @@ class ServiceRuntime:
         """
         android_debug_log(None, "runtime.start_scheduler.request", config_id=config_id)
         async with self._async_lock():
-            session = self._get_or_create_session(config_id)
-            android_debug_log(session.baas.logger, "runtime.start_scheduler.session", config_id=config_id)
-            if set_log: set_log()
-            if session.thread and session.thread.is_alive():
-                android_debug_log(
-                    session.baas.logger,
-                    "runtime.start_scheduler.already_running",
-                    config_id=config_id,
-                    thread=session.thread.name,
-                )
+            pending_thread = self._scheduler_threads.get(config_id)
+            session = self._sessions.get(config_id)
+            if (pending_thread and pending_thread.is_alive()) or (
+                session is not None and session.thread and session.thread.is_alive()
+            ):
                 return {"status": "already-running", "config_id": config_id}
-            android_debug_log(session.baas.logger, "runtime.display_guard.activate.begin", config_id=config_id)
-            await run_blocking(self._android_display_guard.activate, session.baas.logger)
-            android_debug_log(session.baas.logger, "runtime.display_guard.activate.done", config_id=config_id)
-            try:
-                android_debug_log(session.baas.logger, "runtime.init_all_data.begin", config_id=config_id)
-                init_ok = await run_blocking(session.baas.init_all_data)
-                android_debug_log(
-                    session.baas.logger,
-                    "runtime.init_all_data.done",
-                    config_id=config_id,
-                    ok=init_ok,
-                )
-            except Exception as exc:
-                android_debug_log(
-                    session.baas.logger,
-                    "runtime.init_all_data.exception",
-                    config_id=config_id,
-                    error=repr(exc),
-                )
-                await run_blocking(self._android_display_guard.release, session.baas.logger)
-                raise
-            if not init_ok:
-                self._print_recent_logger_entries(session.baas.logger, "Baas_thread initialization failed")
-                await run_blocking(self._android_display_guard.release, session.baas.logger)
-                raise RuntimeError("Baas_thread initialization failed")
+
+            cancel_event = threading.Event()
 
             def runner() -> None:
-                android_debug_log(session.baas.logger, "runtime.scheduler_thread.enter", config_id=config_id)
+                session: Optional[ConfigSession] = None
+                logger = None
                 try:
-                    session.baas.send("start")
+                    session = self._get_or_create_session(config_id)
+                    logger = session.baas.logger
+                    session.thread = threading.current_thread()
+                    if set_log:
+                        set_log()
+                    android_debug_log(logger, "runtime.scheduler_thread.enter", config_id=config_id)
+                    if cancel_event.is_set():
+                        return
+                    android_debug_log(logger, "runtime.display_guard.activate.begin", config_id=config_id)
+                    self._android_display_guard.activate(logger)
+                    android_debug_log(logger, "runtime.display_guard.activate.done", config_id=config_id)
+                    android_debug_log(logger, "runtime.init_all_data.begin", config_id=config_id)
+                    init_ok = session.baas.init_all_data()
+                    android_debug_log(logger, "runtime.init_all_data.done", config_id=config_id, ok=init_ok)
+                    if not init_ok:
+                        raise RuntimeError("Baas_thread initialization returned false")
+                    if cancel_event.is_set():
+                        session.baas.send("stop")
+                    else:
+                        session.baas.send("start")
+                except Exception as exc:
+                    message = f"Scheduler initialization failed: {exc}"
+                    android_debug_log(logger, "runtime.scheduler_thread.exception", config_id=config_id,
+                                      error=repr(exc))
+                    if logger is not None:
+                        logger.error(message)
+                        self._print_recent_logger_entries(logger, "Baas_thread initialization failed")
+                    print(f"[BAAS service] {message}", flush=True)
+                    self._update_status(config_id, running=False, is_flag_run=False, exit_code=1,
+                                        current_task=None, waiting_tasks=[], error=message)
+                    return
                 finally:
-                    android_debug_log(
-                        session.baas.logger,
-                        "runtime.scheduler_thread.exit",
-                        config_id=config_id,
-                        flag_run=session.baas.flag_run,
-                    )
-                    self._android_display_guard.release(session.baas.logger)
-                    session.thread = None
-                    self._update_status(config_id, running=False, is_flag_run=session.baas.flag_run, current_task=None,
-                                        waiting_tasks=[])
+                    flag_run = bool(session and session.baas.flag_run)
+                    android_debug_log(logger, "runtime.scheduler_thread.exit", config_id=config_id,
+                                      flag_run=flag_run)
+                    self._android_display_guard.release(logger)
+                    if session is not None:
+                        session.thread = None
+                    self._scheduler_threads.pop(config_id, None)
+                    self._scheduler_cancel_events.pop(config_id, None)
+                    if self.current_status().get(config_id, {}).get("running"):
+                        self._update_status(config_id, running=False, is_flag_run=flag_run, current_task=None,
+                                            waiting_tasks=[])
 
             thread = threading.Thread(
                 target=runner,
                 name=f"baas-scheduler-{config_id}",
                 daemon=True,
             )
-            session.thread = thread
+            self._scheduler_threads[config_id] = thread
+            self._scheduler_cancel_events[config_id] = cancel_event
             thread.start()
-            android_debug_log(
-                session.baas.logger,
-                "runtime.scheduler_thread.started",
-                config_id=config_id,
-                thread=thread.name,
-            )
             self._update_status(config_id, running=True, is_flag_run=True, exit_code=None, current_task=None,
-                                waiting_tasks=[])
+                                waiting_tasks=[], error=None)
             return {"status": "started", "config_id": config_id}
 
     @staticmethod
@@ -537,8 +538,16 @@ class ServiceRuntime:
         """Stop the scheduler thread for a config if it is running."""
         logger = None
         async with self._async_lock():
+            cancel_event = self._scheduler_cancel_events.get(config_id)
+            if cancel_event is not None:
+                cancel_event.set()
             session = self._sessions.get(config_id)
             if session is None:
+                thread = self._scheduler_threads.get(config_id)
+                if thread and thread.is_alive():
+                    self._update_status(config_id, running=False, is_flag_run=False,
+                                        current_task=None, waiting_tasks=[])
+                    return {"status": "stopping", "config_id": config_id}
                 return {"status": "unknown-config", "config_id": config_id}
             logger = session.baas.logger
             if not session.thread:
@@ -549,7 +558,7 @@ class ServiceRuntime:
             thread = session.thread
             session.thread = None
         if thread and thread.is_alive():
-            thread.join(timeout=10.0)
+            await run_blocking(thread.join, 10.0)
         await run_blocking(self._android_display_guard.force_restore, logger)
         self._update_status(config_id, running=False, is_flag_run=False, current_task=None, waiting_tasks=[])
         return {"status": "stopped", "config_id": config_id}
@@ -575,7 +584,7 @@ class ServiceRuntime:
 
     async def stop_all_tasks(self) -> Dict[str, Any]:
         """Stop every running BAAS scheduler/solver session before installation work."""
-        config_ids = list(self._sessions.keys())
+        config_ids = list(set(self._sessions) | set(self._scheduler_threads))
         results = []
         for config_id in config_ids:
             results.append(await self.stop_scheduler(config_id))
