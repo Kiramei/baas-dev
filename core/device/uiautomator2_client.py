@@ -8,6 +8,9 @@ import requests
 from uiautomator2.version import (__apk_version__, __atx_agent_version__, __version__)
 import os
 import json
+import subprocess
+
+from adbutils import adb_path
 
 appdir = os.path.join(os.path.expanduser("~"), '.uiautomator2')
 
@@ -177,9 +180,29 @@ class BAAS_U2_Initer:
         """
         self.shell("pm", "uninstall", "com.github.uiautomator")
         self.shell("pm", "uninstall", "com.github.uiautomator.test")
-        for filename, url in app_uiautomator_apk_local_path():
-            path = self.push_url(url, mode=0o644)
-            self.shell("pm", "install", "-r", "-t", path)
+        for filename, path in app_uiautomator_apk_local_path():
+            command = [
+                adb_path(),
+                "-s",
+                self._device.serial,
+                "install",
+                "-r",
+                "-t",
+                os.path.abspath(path),
+            ]
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0 or "Success" not in output.splitlines():
+                raise RuntimeError(
+                    f"Failed to install {filename} on {self._device.serial}: "
+                    f"{output or 'adb install returned no output'}"
+                )
             self.logger.info("- " + filename + " installed.")
 
     def push_url(self, path, dest=None, mode=0o755):
