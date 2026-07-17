@@ -128,7 +128,36 @@ class Baas_thread:
     def get_config(self):
         return self.config_set
 
+    def set_parity_trace(self, recorder):
+        """Opt in to behavior-parity tracing for host-facing operations.
+
+        No recorder is created by default, and no environment setting enables
+        this implicitly. Passing ``None`` disables an injected recorder again.
+        """
+        self.parity_trace = recorder
+
     def click(self, x, y, count=1, rate=0, duration=0, wait_over=False):
+        recorder = getattr(self, "parity_trace", None)
+        if recorder is None:
+            return self._click_untraced(x, y, count, rate, duration, wait_over)
+        with recorder.host_operation(
+            "baas.click",
+            {
+                "x": x,
+                "y": y,
+                "count": count,
+                "rate": rate,
+                "duration": duration,
+                "wait_over": wait_over,
+            },
+        ) as span:
+            result = self._click_untraced(x, y, count, rate, duration, wait_over)
+            span.set_result(
+                {"scheduled": self.control.method != "nemu" and not wait_over}
+            )
+            return result
+
+    def _click_untraced(self, x, y, count=1, rate=0, duration=0, wait_over=False):
         if not self.flag_run:
             raise RequestHumanTakeOver
         if self.control.method == "nemu":
@@ -171,6 +200,15 @@ class Baas_thread:
         return self.normalize_screenshot(img)
 
     def get_screenshot_array(self):
+        recorder = getattr(self, "parity_trace", None)
+        if recorder is None:
+            return self._get_screenshot_array_untraced()
+        with recorder.host_operation("baas.screenshot", {}) as span:
+            result = self._get_screenshot_array_untraced()
+            span.set_result(result)
+            return result
+
+    def _get_screenshot_array_untraced(self):
         if not self.flag_run:
             raise RequestHumanTakeOver
         return self.normalize_screenshot(self.screenshot.screenshot())
@@ -727,6 +765,23 @@ class Baas_thread:
             return False
 
     def swipe(self, fx, fy, tx, ty, duration=None, post_sleep_time=0):
+        recorder = getattr(self, "parity_trace", None)
+        if recorder is None:
+            return self._swipe_untraced(fx, fy, tx, ty, duration, post_sleep_time)
+        with recorder.host_operation(
+            "baas.swipe",
+            {
+                "from": [fx, fy],
+                "to": [tx, ty],
+                "duration": duration,
+                "post_sleep_time": post_sleep_time,
+            },
+        ) as span:
+            result = self._swipe_untraced(fx, fy, tx, ty, duration, post_sleep_time)
+            span.set_result(result)
+            return result
+
+    def _swipe_untraced(self, fx, fy, tx, ty, duration=None, post_sleep_time=0):
         if not self.flag_run:
             raise RequestHumanTakeOver
         self.logger.info(f"swipe from ( " + str(fx) + " , " + str(fy) + " ) --> ( " + str(tx) + " , " + str(ty) + " )")
