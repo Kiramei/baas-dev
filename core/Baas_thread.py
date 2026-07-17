@@ -152,7 +152,9 @@ class Baas_thread:
             },
         ) as span:
             result = self._click_untraced(x, y, count, rate, duration, wait_over)
-            span.set_result({"scheduled": not wait_over})
+            span.set_result(
+                {"scheduled": self.control.method != "nemu" and not wait_over}
+            )
             return result
 
     def _click_untraced(self, x, y, count=1, rate=0, duration=0, wait_over=False):

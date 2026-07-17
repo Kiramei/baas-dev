@@ -44,15 +44,18 @@ code already consumes those injected sources.
 
 ## Safe values and replay fixtures
 
-Mappings are sorted by key. Collections, nesting, strings, events, and event
-bytes have configured bounds. Unknown objects serialize as type names, avoiding
+Mappings and unordered collections larger than their item bound are summarized
+without traversing their contents; bounded mappings are sorted by key, while
+bounded sequences retain their prefix. Nesting, strings, binary/image hashing,
+events, and event bytes have configured bounds. Unknown objects serialize as type names, avoiding
 nondeterministic `repr()` output. Non-finite floats use tagged values.
 
 Keys such as password, token, secret, authorization, cookie, and API/private or
 access keys are recursively replaced with `<redacted>`. Common inline forms and
 Bearer credentials in strings are redacted too.
 
-Bytes are represented by SHA-256 and size. Numpy-compatible arrays are treated
+Bytes within the configured hashing bound are represented by SHA-256 and size;
+larger buffers are size-only truncated records. Numpy-compatible arrays are treated
 as images and represented by SHA-256, byte size, shape, and dtype. Pixel data is
 never written. Wrap an image in `ImageFixture(image, "fixtures/name.png")` to add
 a stable fixture reference that a replay implementation can resolve.
@@ -61,7 +64,8 @@ a stable fixture reference that a replay implementation can resolve.
 
 `Baas_thread` traces logical `baas.click`, `baas.swipe`, and `baas.screenshot`
 operations after explicit recorder injection. Click completion means the legacy
-call returned; for the default asynchronous click path, the end result contains
-`{"scheduled": true}` and does not claim the worker has completed. Existing
+call returned; only the default non-waiting threaded click path reports
+`{"scheduled": true}` and does not claim the worker has completed. Nemu clicks
+and calls with `wait_over=true` report `{"scheduled": false}`. Existing
 clock/RNG calls inside legacy operations are only identified, not replaced in
 this foundation stage.

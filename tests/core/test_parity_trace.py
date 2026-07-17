@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import threading
+from collections.abc import Mapping
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +33,7 @@ class FakeImage:
 
     def __init__(self, raw):
         self.raw = raw
+        self.nbytes = len(raw)
 
     def tobytes(self, order="C"):
         assert order == "C"
@@ -84,6 +87,29 @@ def test_baas_thread_screenshot_hook_is_opt_in_and_hashes_result():
     assert end["payload"]["operation"] == "baas.screenshot"
     assert end["payload"]["result"]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert "raw" not in end["payload"]["result"]
+
+
+def test_baas_thread_click_trace_distinguishes_synchronous_nemu_from_scheduled_click():
+    stream = io.StringIO()
+    recorder = ParityTraceRecorder(stream, session_id="click", wall_time_ns=lambda: 0)
+    thread = Baas_thread.__new__(Baas_thread)
+    thread.flag_run = True
+    calls = []
+    thread.click_thread = lambda *args: calls.append(args)
+    thread.set_parity_trace(recorder)
+
+    thread.control = SimpleNamespace(method="nemu")
+    thread.click(1, 2, wait_over=False)
+    thread.control = SimpleNamespace(method="adb")
+    thread.click(3, 4, wait_over=True)
+    recorder.close()
+
+    ends = [item for item in records(stream) if item["event"] == "host.end"]
+    assert [item["payload"]["result"] for item in ends] == [
+        {"scheduled": False},
+        {"scheduled": False},
+    ]
+    assert calls == [(1, 2, 1, 0, 0), (3, 4, 1, 0, 0)]
 
 
 def test_schema_sequence_metadata_and_injected_clock_rng_markers():
@@ -151,6 +177,37 @@ def test_decorator_records_named_parameters_result_and_exception():
     assert error["payload"]["error"]["class"] == "builtins.ZeroDivisionError"
 
 
+def test_decorator_awaits_async_result_error_and_cancellation():
+    stream = io.StringIO()
+    recorder = ParityTraceRecorder(stream, session_id="async", wall_time_ns=lambda: 0)
+
+    @recorder.trace_host_operation("async.ok")
+    async def succeed(value):
+        await asyncio.sleep(0)
+        return value + 1
+
+    @recorder.trace_host_operation("async.error")
+    async def fail():
+        await asyncio.sleep(0)
+        raise RuntimeError("failure after await")
+
+    @recorder.trace_host_operation("async.cancel")
+    async def cancel():
+        raise asyncio.CancelledError("stop")
+
+    assert asyncio.run(succeed(4)) == 5
+    with pytest.raises(RuntimeError):
+        asyncio.run(fail())
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cancel())
+    recorder.close()
+
+    output = records(stream)
+    assert [item["event"] for item in output].count("host.end") == 1
+    assert [item["event"] for item in output].count("host.error") == 1
+    assert [item["event"] for item in output].count("host.cancel") == 1
+
+
 def test_cancel_event_is_distinct_and_exception_is_not_swallowed():
     stream = io.StringIO()
     recorder = ParityTraceRecorder(stream, session_id="cancel", wall_time_ns=lambda: 0)
@@ -197,7 +254,10 @@ def test_sensitive_values_are_redacted_and_images_are_hash_only_with_fixture_ref
             "token": "do-not-write",
             "nested": {"api_key": "also-secret"},
             "message": "authorization=abcdef",
-            "image": ImageFixture(FakeImage(raw), "fixtures/home-screen.png"),
+            "header_line": "Authorization: Bearer super-secret-token",
+            "json_text": '{"password":"hunter2"}',
+            "path": __import__("pathlib").Path("token=path-secret"),
+            "image": ImageFixture(FakeImage(raw), "fixtures/token=fixture-secret.png"),
         }
     )
 
@@ -205,6 +265,13 @@ def test_sensitive_values_are_redacted_and_images_are_hash_only_with_fixture_ref
     assert "do-not-write" not in encoded
     assert "also-secret" not in encoded
     assert "abcdef" not in encoded
+    assert "super-secret-token" not in encoded
+    assert "hunter2" not in encoded
+    assert "path-secret" not in encoded
+    assert "fixture-secret" not in encoded
+    late_sensitive_key = "x" * 5000 + "_token"
+    bounded_key = serializer.serialize({late_sensitive_key: "late-key-secret"})
+    assert "late-key-secret" not in json.dumps(bounded_key)
     assert result["token"] == "<redacted>"
     assert result["message"] == "authorization=<redacted>"
     image = result["image"]
@@ -214,9 +281,145 @@ def test_sensitive_values_are_redacted_and_images_are_hash_only_with_fixture_ref
         "size_bytes": len(raw),
         "shape": [2, 2, 3],
         "dtype": "uint8",
-        "fixture_ref": "fixtures/home-screen.png",
+        "fixture_ref": "fixtures/token=<redacted>",
     }
     assert raw.hex() not in encoded
+
+    stream = io.StringIO()
+    recorder = ParityTraceRecorder(stream, session_id="safe", wall_time_ns=lambda: 0)
+    recorder.record_task("task.token=event-secret")
+    recorder.close()
+    assert "event-secret" not in stream.getvalue()
+
+
+def test_collection_bounds_do_not_copy_an_unbounded_sequence_prefix():
+    class SliceOnlyList(list):
+        def __iter__(self):
+            raise AssertionError("bounded sequence serialization must use a slice")
+
+    serializer = SafeSerializer(max_items=3)
+    result = serializer.serialize(
+        {
+            "mapping": {str(index): index for index in range(10)},
+            "sequence": SliceOnlyList(range(10)),
+            "set": set(range(10)),
+        }
+    )
+
+    assert result["sequence"] == [
+        0,
+        1,
+        2,
+        {"$truncated": "max_items", "omitted": 7},
+    ]
+    assert result["mapping"] == {
+        "$type": "mapping",
+        "$truncated": "max_items",
+        "size": 10,
+    }
+    assert result["set"] == {
+        "$type": "builtins.set",
+        "$truncated": "max_items",
+        "size": 10,
+    }
+
+
+def test_binary_hashing_has_an_input_work_bound():
+    serializer = SafeSerializer(max_binary_bytes=4)
+    assert serializer.serialize(b"12345") == {
+        "$type": "binary",
+        "$truncated": "max_binary_bytes",
+        "size_bytes": 5,
+    }
+
+
+def test_global_node_budget_stops_repeated_shared_subtrees():
+    serializer = SafeSerializer(max_items=128, max_nodes=5)
+    shared = [[{"value": 1}] * 128] * 128
+
+    result = serializer.serialize(shared)
+    encoded = json.dumps(result, sort_keys=True)
+
+    assert '"$truncated": "max_nodes"' in encoded
+    assert len(encoded) < 512
+
+
+def test_exhausted_node_budget_never_hides_omitted_sequence_items():
+    serializer = SafeSerializer(max_items=1, max_nodes=2)
+
+    assert serializer.serialize([1, 2]) == [
+        1,
+        {"$truncated": "max_items", "omitted": 1},
+    ]
+
+
+def test_mapping_keys_are_bounded_without_calling_unknown_stringifiers():
+    class ExplosiveKey:
+        def __str__(self):
+            raise AssertionError("unknown mapping keys must not be stringified")
+
+    serializer = SafeSerializer(max_string_chars=16)
+    result = serializer.serialize(
+        {
+            "x" * 100_000 + "_token": "long-key-secret",
+            ExplosiveKey(): "unknown-key-secret",
+        }
+    )
+    encoded = json.dumps(result, sort_keys=True)
+
+    assert "long-key-secret" not in encoded
+    assert "unknown-key-secret" not in encoded
+    assert "<truncated-key>" in encoded
+    assert len(encoded) < 256
+
+
+def test_normalized_mapping_key_collisions_are_insertion_order_independent():
+    generated_key = 1
+    matching_text_key = "<key:builtins.int>"
+    serializer = SafeSerializer()
+
+    first = serializer.serialize(
+        {generated_key: "hidden", matching_text_key: "visible"}
+    )
+    second = serializer.serialize(
+        {matching_text_key: "visible", generated_key: "hidden"}
+    )
+
+    assert first == second
+    assert first == {
+        matching_text_key: "visible",
+        matching_text_key + "#2": "<redacted>",
+    }
+
+
+def test_large_metadata_is_not_copied_before_bounded_serialization():
+    class OversizedMetadata(Mapping):
+        def __len__(self):
+            return 129
+
+        def __iter__(self):
+            raise AssertionError("oversized metadata must not be iterated")
+
+        def __getitem__(self, key):
+            raise AssertionError("oversized metadata must not be indexed")
+
+    stream = io.StringIO()
+    recorder = ParityTraceRecorder(
+        stream,
+        session_id="bounded-metadata",
+        wall_time_ns=lambda: 0,
+        metadata=OversizedMetadata(),
+    )
+    recorder.record_task("task.metadata", OversizedMetadata())
+    recorder.close()
+
+    output = records(stream)
+    for event in output[:2]:
+        assert event["payload"]["metadata"] == {
+            "$type": "mapping",
+            "$truncated": "max_items",
+            "size": 129,
+        }
 
 
 def test_bounds_and_flush_are_observable_without_unbounded_output():
