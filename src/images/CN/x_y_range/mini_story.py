@@ -5,4 +5,5 @@ x_y_range = {
     "select-episode": (100, 9, 350, 41),
     "episode-cleared-feature": (845, 182, 1018, 212),
     "episode-info": (500, 145, 740, 174),
+    'enter-mini-story': (619, 364, 846, 404),
 }

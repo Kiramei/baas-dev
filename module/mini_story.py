@@ -67,6 +67,12 @@ def to_mini_story(self, _from="main"):
         "group_story_select-episode": (56, 40) if _from == "episode" else (742, 287),
         'mini_story_episode-info': (916, 162),
     }
+
+    if self.server == "CN":
+        img_possibles = {
+            **img_possibles,
+            "mini_story_enter-mini-story": (733, 250),
+        }
     img_possibles.update(picture.GAME_ONE_TIME_POP_UPS[self.server])
     picture.co_detect(self, None, rgb_possibles, img_ends, img_possibles, True)
 
