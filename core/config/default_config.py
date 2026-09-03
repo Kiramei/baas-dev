@@ -3550,7 +3550,7 @@ STATIC_DEFAULT_CONFIG = '''
         ]
     },
     "current_game_activity": {
-        "CN": "HighlanderRailroadExplosionIncident",
+        "CN": "FromOpera0068WithLove",
         "Global": "SecretMidnightParty",
         "JP": "HighlanderRailroadExplosionIncident"
     },
