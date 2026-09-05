@@ -3551,7 +3551,7 @@ STATIC_DEFAULT_CONFIG = '''
     },
     "current_game_activity": {
         "CN": "FromOpera0068WithLove",
-        "Global": "SecretMidnightParty",
+        "Global": "PlayBallAimforaGrandSlamHomeRun",
         "JP": "HighlanderRailroadExplosionIncident"
     },
     "dailyGameActivity": {
