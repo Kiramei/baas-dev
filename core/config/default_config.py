@@ -428,6 +428,7 @@ DEFAULT_CONFIG = """
         ["primary","normal","advanced","superior"],
         ["primary","normal","advanced","superior"],
         ["primary","normal","advanced","superior"],
+        ["primary","normal","advanced","superior"],
         ["primary","normal","advanced","superior"]
     ],
     "purchase_lesson_ticket_times": "0",

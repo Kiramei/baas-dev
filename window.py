@@ -55,6 +55,9 @@ def update_config_reserve_old(config_old, config_new):  # 保留旧配置原有�
     for key in config_new:
         if key not in config_old:
             config_old[key] = config_new[key]
+    key = "lesson_each_region_object_priority"
+    if len(config_old.get(key, [])) < len(config_new.get(key, [])):
+        config_old[key].extend(config_new[key][len(config_old[key]):])
     dels = []
     for key in config_old:
         if key not in config_new:

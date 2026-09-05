@@ -426,7 +426,8 @@ def choose_lesson(self, res, region):
         return lo
     else:
         tier = ["superior", "advanced", "normal", "primary"]
-        pri = self.config.lesson_each_region_object_priority[region]
+        priorities = self.config.lesson_each_region_object_priority
+        pri = priorities[region] if region < len(priorities) else tier
         if pri == []:
             for i in range(8, -1, -1):  # choose the last available which gives higher tier reward
                 if res[0][i] == "available":
