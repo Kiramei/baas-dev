@@ -6,10 +6,13 @@ from datetime import datetime, timedelta
 
 from typing import Union
 
-from PyQt5.QtCore import Qt, QObject, QEvent, pyqtSignal, QRectF
+from PyQt5.QtCore import Qt, QObject, QEvent, pyqtSignal, QRect, QRectF, QPropertyAnimation
 from PyQt5.QtGui import QFont, QPainter, QColor, QIcon, QPixmap
 from PyQt5.QtSvg import QSvgRenderer
-from PyQt5.QtWidgets import QVBoxLayout, QLabel, QFrame, QHeaderView, QHBoxLayout, QWidget, QScrollArea
+from PyQt5.QtWidgets import (
+    QVBoxLayout, QLabel, QFrame, QHeaderView, QHBoxLayout, QWidget, QScrollArea,
+    QApplication, QSizePolicy,
+)
 from qfluentwidgets import (MessageBoxBase, TableWidget, CheckBox, LineEdit, SubtitleLabel, ImageLabel, FlowLayout,
                             ComboBox, PushButton, ExpandSettingCard, FluentIcon as FIF, ScrollArea)
 from qfluentwidgets.window.fluent_window import FluentWindowBase, FluentTitleBar
@@ -178,38 +181,28 @@ class OutlineLabel(QLabel):
 
 
 class DialogSettingBox(MessageBoxBase):
-    """
-    A custom message box with a settings layout.
+    """Settings dialog with target-only shop and cafe sizing."""
 
-    This dialog box supports dynamic layouts and can adjust its size
-    based on specific settings.
-
-    When opened from Card mode, ``config`` is typically a ``ConfigDraft``.
-    OK commits the draft to disk; Cancel rolls it back. Live ConfigSet can
-    still be passed (legacy / non-draft callers).
-    """
+    _TARGET_SHOPS = {"shoppriority", "arenashoppriority"}
+    _TARGET_CAFE = "cafeinvite"
+    _HORIZONTAL_CHROME = 48
+    _VERTICAL_CHROME = 129
+    _SCREEN_MARGIN = 64
+    # 咖啡厅内容的真实最小宽度。低于 Layout 的 640 竖排断点，
+    # 窄窗口下弹窗才能真正进入竖排而不是溢出屏幕。
+    _CAFE_MIN_WIDTH = 360
+    # 商店弹窗内容区的最小可视高度：保住一行商品可见。
+    _SHOP_MIN_HEIGHT = 160
 
     def __init__(self, parent=None, config=None, layout=None, *_, **kwargs):
-        """
-        Initializes the DialogSettingBox.
-
-        Args:
-            parent (QWidget, optional): The parent widget. Defaults to None.
-            config (Config, optional): Configuration object for settings injection. Defaults to None.
-            layout (QLayout, optional): The layout to display inside the dialog. Defaults to None.
-            **kwargs: Additional keyword arguments.
-        """
         super().__init__(parent)
 
-        setting_name = kwargs.get('setting_name')  # Retrieve the setting name from kwargs
-        self.config = config  # Store the configuration object (may be ConfigDraft)
+        setting_name = str(kwargs.get("setting_name") or "").lower()
+        self.config = config
         self._content_layout = layout
 
-        try:
-            self.yesButton.setText(self.tr('确定'))
-            self.cancelButton.setText(self.tr('取消'))
-        except Exception:
-            pass
+        self.yesButton.setText(self.tr("确定"))
+        self.cancelButton.setText(self.tr("取消"))
 
         # Create a frame to wrap the provided layout
         frame = QFrame(self)
@@ -226,76 +219,255 @@ class DialogSettingBox(MessageBoxBase):
             '}\n'
         )
 
-        # Shops use a viewport that follows the host window and caps at a
-        # comfortable desktop width. The editor itself handles grid reflow.
-        is_shop = bool(setting_name and ('shop' in setting_name or 'Shop' in setting_name))
-        if is_shop:
-            frame.setMinimumWidth(0)
+        if setting_name in self._TARGET_SHOPS:
+            self._init_shop(frame, layout, parent)
+        elif setting_name == self._TARGET_CAFE:
+            self._init_cafe(frame, layout, parent)
+        else:
+            self._init_upstream(frame, layout)
 
-        # Set the wrapper layout for the frame
-        frame.setLayout(layout_wrapper)
-        try:
-            from PyQt5.QtWidgets import QSizePolicy
-            # Content grows with goods; viewport stays capped so long lists scroll.
-            frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-            if hasattr(layout, 'setSizePolicy'):
-                layout.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        except Exception:
-            pass
+    def _init_upstream(self, frame, layout):
+        """Preserve the original geometry for every non-target page."""
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        if layout is not None and hasattr(layout, "setSizePolicy"):
+            layout.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         scroll_area = ScrollArea()
         scroll_area.setStyleSheet(
-            'background-color: transparent;\n'
-            'border: none;\n'
+            "background-color: transparent;\nborder: none;\n"
         )
         scroll_area.setWidget(frame)
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        if is_shop:
-            scroll_area.setObjectName('shopScrollArea')
-            self._shop_scroll_area = scroll_area
-            self._shop_frame = frame
-            self._resize_shop_viewport(self.size())
-        else:
-            scroll_area.setFixedWidth(self.width() - 100)
-
-        # Add the frame to the dialog's main layout
+        scroll_area.setFixedWidth(self.width() - 100)
         self.viewLayout.addWidget(scroll_area)
 
-    def _resize_shop_viewport(self, size):
-        if not hasattr(self, '_shop_scroll_area'):
-            return
+    def _init_shop(self, frame, layout, parent):
+        # 保存引用供 _refit_shop_height 在 show 后字体就绪时重算：
+        # 构造期量高用的字体可能尚未应用样式表，长名换行按更小字体
+        # 量矮，竞技场商品因此一页放不下出滚动条；show 时再量一次。
+        self._shop_frame = frame
+        self._shop_layout = layout
+        self._shop_parent = parent
+        content_width, content_height = self._compute_shop_size(layout, parent)
+        self._shop_content_width = content_width
+        self._shop_content_height = content_height
 
-        from gui.components.shop_goods import (
-            SHOP_DIALOG_HORIZONTAL_RESERVE,
-            SHOP_DIALOG_VERTICAL_RESERVE,
-            SHOP_MAX_WIDTH,
-            SHOP_VIEWPORT_HEIGHT,
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        if layout is not None:
+            layout.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        frame.setFixedSize(content_width, content_height)
+        self.viewLayout.addWidget(frame)
+        self.widget.setFixedSize(
+            content_width + self._HORIZONTAL_CHROME,
+            content_height + self._VERTICAL_CHROME,
         )
 
-        available_width = max(1, size.width() - SHOP_DIALOG_HORIZONTAL_RESERVE)
-        available_height = max(1, size.height() - SHOP_DIALOG_VERTICAL_RESERVE)
-        viewport_width = min(SHOP_MAX_WIDTH, available_width)
-        viewport_height = min(SHOP_VIEWPORT_HEIGHT, available_height)
-        self._shop_scroll_area.setFixedSize(viewport_width, viewport_height)
-        self._shop_frame.setMinimumWidth(0)
-        self._shop_frame.updateGeometry()
+    def _init_cafe(self, frame, layout, parent):
+        available = self._available_geometry(parent)
+        parent_width = self._parent_extent(parent, "width", available.width())
+        parent_height = self._parent_extent(parent, "height", available.height())
+        width_limit = min(parent_width, available.width()) - self._HORIZONTAL_CHROME - self._SCREEN_MARGIN
+        height_limit = min(parent_height, available.height()) - self._VERTICAL_CHROME - self._SCREEN_MARGIN
+        # 下限取咖啡厅内容的真实最小宽度（低于 640 竖排断点），
+        # 窄窗口下内容宽度能真正跌破断点改走竖排，而不是溢出屏幕。
+        content_width = max(self._CAFE_MIN_WIDTH, min(820, width_limit))
+        content_height = max(360, min(480, height_limit))
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._resize_shop_viewport(event.size())
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        if layout is not None:
+            layout.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 竖排堆叠时内容会高于弹窗可视高度，用内部滚动承接，
+        # 避免通用设置或咖啡厅卡片被裁掉、控件不可点。
+        scroll_area = ScrollArea()
+        scroll_area.setStyleSheet(
+            "background-color: transparent;\nborder: none;\n"
+        )
+        scroll_area.setWidget(frame)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFixedSize(content_width, content_height)
+        self.viewLayout.addWidget(scroll_area)
+        self.widget.setFixedSize(
+            content_width + self._HORIZONTAL_CHROME,
+            content_height + self._VERTICAL_CHROME,
+        )
+
+    def _accelerate_fade_in(self):
+        """把配置弹窗的整体弹出动画压到 0.1s 即加载完毕。
+
+        弹窗淡入动画由基类 showEvent 创建（默认约 200ms），
+        这里在动画启动后立刻把时长改为 100ms，并在淡入结束后
+        清理整窗与内容容器上的图形特效（见 _finish_fade_in），
+        避免弹窗持续离屏渲染，拖慢内部控件与下拉菜单。
+        """
+        try:
+            animations = self.findChildren(QPropertyAnimation)
+        except Exception:
+            return
+        for animation in animations:
+            try:
+                property_name = bytes(animation.propertyName()).decode("ascii", "ignore").lower()
+            except Exception:
+                property_name = ""
+            if "opacity" not in property_name:
+                continue
+            try:
+                animation.setDuration(100)
+                animation.finished.connect(self._finish_fade_in)
+            except Exception:
+                pass
+
+    def _finish_fade_in(self):
+        """淡入结束后移除弹窗上的图形特效，恢复正常渲染。
+
+        基类在构造时给内容容器挂了一个大模糊半径的投影特效，
+        且不会移除：挂了特效的容器会持续离屏渲染，弹窗内任何
+        重绘（悬停、下拉展开收起）都要重画整棵内容树并重算模糊，
+        内部控件和下拉菜单因此明显滞涩。淡入用的透明度特效也一并
+        兜底清理（部分版本组件库不会自动移除）。
+        """
+        try:
+            if self.graphicsEffect() is not None:
+                self.setGraphicsEffect(None)
+        except Exception:
+            pass
+        try:
+            widget = getattr(self, "widget", None)
+            if widget is not None and widget.graphicsEffect() is not None:
+                widget.setGraphicsEffect(None)
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 先按就绪字体重量高、把弹窗尺寸修正到真实内容高度，再启动
+        # 淡入动画：构造期量矮的弹窗会在 show 瞬间长到内容高度。
+        self._refit_shop_height()
+        self._accelerate_fade_in()
+
+    @staticmethod
+    def _fit_shop_height(layout, width, cap):
+        """按当前宽度下的实际内容高度收窄商店视口高度。
+
+        内容比上限矮时贴着内容收口（避免弹窗底部空白），
+        比上限高时维持上限交给面板内部滚动。
+        """
+        if layout is None:
+            return cap
+        try:
+            if hasattr(layout, "hasHeightForWidth") and layout.hasHeightForWidth():
+                desired = int(layout.heightForWidth(int(width)))
+            else:
+                desired = int(layout.sizeHint().height())
+        except Exception:
+            return cap
+        if desired <= 0:
+            return cap
+        return max(DialogSettingBox._SHOP_MIN_HEIGHT, min(cap, desired))
+
+    @staticmethod
+    def _compute_shop_size(layout, parent):
+        """商店弹窗的内容宽高：宽度取父窗口/屏幕较小值，高度先取上限
+        再按当前宽度下的内容高度收窄。
+
+        构造期与 show 后都调它。构造期样式表字体可能尚未应用到商品
+        名标签，长名换行按更小字体量矮；show 后字体就绪，_refit_shop_height
+        据此重量一次，弹窗随真实内容高度增长。
+        """
+        from gui.components.shop_goods import (
+            GRID_COLUMNS,
+            GRID_H_SPACING,
+            MIN_COL_W,
+            SHOP_MAX_WIDTH,
+        )
+
+        available = DialogSettingBox._available_geometry(parent)
+        parent_width = DialogSettingBox._parent_extent(parent, "width", available.width())
+        parent_height = DialogSettingBox._parent_extent(parent, "height", available.height())
+        minimum_width = GRID_COLUMNS * MIN_COL_W + GRID_H_SPACING * (GRID_COLUMNS - 1)
+        width_limit = min(parent_width, available.width()) - DialogSettingBox._HORIZONTAL_CHROME - DialogSettingBox._SCREEN_MARGIN
+        content_width = max(minimum_width, min(SHOP_MAX_WIDTH, width_limit))
+        # 高度与宽度一样取父窗口与屏幕的较小值：矮窗口里弹窗不能超过
+        # 宿主；下限 160 保住一行商品可见，内容高于上限时交给面板内部
+        # 滚动承接。不再施加固定视口上限，宿主足够高时随内容增长。
+        cap = max(
+            DialogSettingBox._SHOP_MIN_HEIGHT,
+            min(parent_height, available.height())
+            - DialogSettingBox._VERTICAL_CHROME
+            - DialogSettingBox._SCREEN_MARGIN,
+        )
+        try:
+            layout.ensurePolished()
+        except Exception:
+            pass
+        content_height = DialogSettingBox._fit_shop_height(layout, content_width, cap)
+        return content_width, content_height
+
+    def _refit_shop_height(self):
+        """show 后字体就绪，按真实字体重量高并重设弹窗尺寸。
+
+        构造期 ensurePolished 不保证样式表字体已落到商品名标签，
+        长名换行按更小的默认字体量高，弹窗被量矮、竞技场商品一页
+        放不下出滚动条。show 时字体就绪，这里按真实字体重量一次，
+        弹窗随真实内容高度增长，商品一页放完。尺寸未变则跳过，
+        避免重复 showEvent 时无谓重排。
+        """
+        frame = getattr(self, "_shop_frame", None)
+        layout = getattr(self, "_shop_layout", None)
+        parent = getattr(self, "_shop_parent", None)
+        if frame is None or layout is None:
+            return
+        content_width, content_height = self._compute_shop_size(layout, parent)
+        if (
+            content_height == getattr(self, "_shop_content_height", -1)
+            and content_width == getattr(self, "_shop_content_width", -1)
+        ):
+            return
+        self._shop_content_width = content_width
+        self._shop_content_height = content_height
+        frame.setFixedSize(content_width, content_height)
+        self.widget.setFixedSize(
+            content_width + self._HORIZONTAL_CHROME,
+            content_height + self._VERTICAL_CHROME,
+        )
+
+    @staticmethod
+    def _parent_extent(parent, method_name, fallback):
+        if parent is None:
+            return fallback
+        method = getattr(parent, method_name, None)
+        if not callable(method):
+            return fallback
+        try:
+            value = int(method())
+        except Exception:
+            return fallback
+        return value if value > 0 else fallback
+
+    @staticmethod
+    def _available_geometry(parent):
+        screen = (
+            parent.screen()
+            if parent is not None and hasattr(parent, "screen")
+            else None
+        )
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is not None:
+            return screen.availableGeometry()
+        return QRect(0, 0, 1024, 768)
 
     def _is_draft(self) -> bool:
-        return bool(getattr(self.config, 'is_draft', False))
+        return bool(getattr(self.config, "is_draft", False))
 
     def accept(self):
-        """Commit draft (if any) then close with Accepted."""
         from gui.util import notification
         from gui.util.config_draft import as_live
 
         if self._is_draft():
-            # Ensure the focused editor flushes into the draft first.
             self.config.flush_pending_editors(self)
             changed = self.config.commit()
             if changed:
@@ -304,11 +476,9 @@ class DialogSettingBox(MessageBoxBase):
         super().accept()
 
     def reject(self):
-        """Drop draft changes then close with Rejected."""
         if self._is_draft():
             self.config.rollback()
         super().reject()
-
 
 class FuncLabel(QLabel):
     button_clicked_signal = pyqtSignal()
