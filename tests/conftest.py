@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import sys
 import types
 
 
 def pytest_configure():
+    if all(importlib.util.find_spec(name) for name in ("PyQt5", "qfluentwidgets")):
+        # Load real GUI helpers before service imports can install headless stubs.
+        importlib.import_module("gui.util.translator")
+        importlib.import_module("gui.util.customized_ui")
+        return
+
     if "gui.util.translator" not in sys.modules:
         translator = types.ModuleType("gui.util.translator")
 
