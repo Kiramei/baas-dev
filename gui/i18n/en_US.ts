@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <!DOCTYPE TS>
 <TS version="2.1" language="en_US" sourcelanguage="zh_CN">
 <context>
@@ -601,6 +601,11 @@ make sure to do it before starting the script.</translation>
         <source>设置编队方式及复制通关队伍限制</source>
         <translation>Configure formation and cleared-team copy limits</translation>
     </message>
+<message>
+        <location filename="../util/config_translation.py" line="111"/>
+        <source>日服PC端</source>
+        <translation>JP PC Client</translation>
+    </message>
 </context>
 <context>
     <name>CreateErrorInfoMessageBox</name>
@@ -780,12 +785,12 @@ make sure to do it before starting the script.</translation>
     <message>
         <location filename="../components/expand/exploreConfig.py" line="19"/>
         <source>使用简易模式推图</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
     <message>
         <location filename="../components/expand/exploreConfig.py" line="22"/>
         <source>简易模式只需要一支成形队伍, 角色较少时建议使用(默认使用第一支队伍)</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -1002,8 +1007,8 @@ Use positive number for below and negative for above:</translation>
     </message>
     <message>
         <location filename="../components/expand/mainlinePriority.py" line="21"/>
-        <source>普通关卡与次数（如&quot;1-1-1,1-2-3&quot;表示关卡1-1打一次，然后关卡1-2打三次）：</source>
-        <translation>Normal stage and number of sweeps(e.g. &quot;1-1-1,1-2-3&quot; means that stage 1-1 is swept once, then stage 1-2 is swept three times):</translation>
+        <source>普通关卡与次数（如"1-1-1,1-2-3"表示关卡1-1打一次，然后关卡1-2打三次）：</source>
+        <translation>Normal stage and number of sweeps(e.g. "1-1-1,1-2-3" means that stage 1-1 is swept once, then stage 1-2 is swept three times):</translation>
     </message>
     <message>
         <location filename="../components/expand/mainlinePriority.py" line="24"/>
@@ -1245,7 +1250,7 @@ For JP or Global server, you can use 'max':</translation>
         <location filename="../components/expand/scriptConfig.py" line="18"/>
         <source>这些功能在运行多个实例时可能无法按预期工作。涉及模拟器的操作将遵循“模拟器启动设置”中的设置。</source>
         <translation>These features may not work as expected when running multiple instances.
-Operations involving the emulator will follow the settings in &quot;Emulator Startup Settings.</translation>
+Operations involving the emulator will follow the settings in "Emulator Startup Settings.</translation>
     </message>
     <message>
         <location filename="../components/expand/friendWhiteList.py" line="111"/>
@@ -2145,6 +2150,31 @@ set the 'emulator address' to your MuMu emulator path, accurate to MuMuPlayer.ex
         <source>当BAAS新增调度任务时的启用状态</source>
         <translation>The activation status when a new scheduling task is added in BAAS</translation>
     </message>
+<message>
+        <location filename="../fragments/process.py" line="88"/>
+        <source>表格视图</source>
+        <translation type="obsolete">Table View</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="309"/>
+        <source>图形视图</source>
+        <translation>Graph View</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="309"/>
+        <source>图形视图需要安装 NodeGraphQt</source>
+        <translation>Graph View requires NodeGraphQt to be installed</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="256"/>
+        <source>切换到图形视图</source>
+        <translation>Switch to Graph View</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="259"/>
+        <source>切换到表格视图</source>
+        <translation>Switch to Table View</translation>
+    </message>
 </context>
 <context>
     <name>PushConfig</name>
@@ -2171,7 +2201,7 @@ set the 'emulator address' to your MuMu emulator path, accurate to MuMuPlayer.ex
     <message>
         <location filename="../components/expand/pushConfig.py" line="29"/>
         <source>飞书推送</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -2265,7 +2295,7 @@ set the 'emulator address' to your MuMu emulator path, accurate to MuMuPlayer.ex
     <message>
         <location filename="../components/expand/serverConfig.py" line="33"/>
         <source>日服PC端</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -2730,6 +2760,154 @@ set the 'emulator address' to your MuMu emulator path, accurate to MuMuPlayer.ex
         <location filename="../components/template_card.py" line="1"/>
         <source>打开配置失败</source>
         <translation>Failed to open settings</translation>
+    </message>
+</context>
+<context>
+    <name>SchedulerGraphView</name>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="234"/>
+        <source>前置任务</source>
+        <translation>Prerequisite Task</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="237"/>
+        <source>作为前置任务</source>
+        <translation>Use as a Prerequisite Task</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="240"/>
+        <source>作为后置任务</source>
+        <translation>Use as Dependent Task</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="243"/>
+        <source>后置任务</source>
+        <translation>Dependent Task</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="274"/>
+        <source>启用</source>
+        <translation>Enabled</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="280"/>
+        <source>下次执行时间</source>
+        <translation>Next Execution Time</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="436"/>
+        <source>调度关系无效</source>
+        <translation type="obsolete">Invalid Scheduler Relationship</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="492"/>
+        <source>时间格式无效，请使用 YYYY-MM-DD HH:MM:SS</source>
+        <translation type="obsolete">Invalid time format. Use YYYY-MM-DD HH:MM:SS</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="381"/>
+        <source>调度配置保存失败</source>
+        <translation type="obsolete">Failed to save scheduler configuration</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="345"/>
+        <source>调度配置包含无法显示的任务关系</source>
+        <translation type="obsolete">Scheduler configuration contains task relationships that cannot be displayed</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="345"/>
+        <source>调度配置中已存在循环依赖</source>
+        <translation type="obsolete">Scheduler configuration already contains a circular dependency</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="37"/>
+        <source>无法读取调度事件配置。</source>
+        <translation>Unable to read the scheduler event configuration.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="40"/>
+        <source>调度事件配置的格式无效。</source>
+        <translation>Scheduler event configuration has an invalid format.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="43"/>
+        <source>调度事件配置缺少必需字段。</source>
+        <translation>Scheduler event configuration is missing required fields.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="46"/>
+        <source>调度事件配置包含无效字段值。</source>
+        <translation>Scheduler event configuration contains invalid field values.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="52"/>
+        <source>调度图布局包含无效的节点坐标。</source>
+        <translation>Scheduler graph layout contains invalid node coordinates.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="58"/>
+        <source>调度关系类型“{kind}”无效。</source>
+        <translation>Scheduler relationship type “{kind}” is invalid.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="64"/>
+        <source>调度任务“{func_name}”不能依赖自身。</source>
+        <translation>Scheduler task “{func_name}” cannot depend on itself.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="73"/>
+        <source>只能连接或断开类型匹配的调度关系端口。</source>
+        <translation>Only scheduler relationship ports of matching types can be connected or disconnected.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="79"/>
+        <source>调度配置保存失败。</source>
+        <translation>Failed to save scheduler configuration.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="82"/>
+        <source>调度图加载失败。</source>
+        <translation>Failed to load the scheduler graph.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="91"/>
+        <source>调度配置中已存在循环依赖。</source>
+        <translation>Scheduler configuration already contains a circular dependency.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="49"/>
+        <source>调度事件配置包含重复的任务标识“{func_name}”。</source>
+        <translation>Scheduler event configuration contains duplicate task identifier “{func_name}”.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="55"/>
+        <source>调度任务“{func_name}”不存在于事件配置中。</source>
+        <translation>Scheduler task “{func_name}” does not exist in the event configuration.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="61"/>
+        <source>调度关系引用了不存在的任务“{func_name}”。</source>
+        <translation>Scheduler relationship references missing task “{func_name}”.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="67"/>
+        <source>任务“{owner_func}”与“{related_func}”之间已存在相同的调度关系。</source>
+        <translation>The same scheduler relationship between “{owner_func}” and “{related_func}” already exists.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="70"/>
+        <source>连接任务“{owner_func}”与“{related_func}”会形成循环依赖。</source>
+        <translation>Connecting tasks “{owner_func}” and “{related_func}” would create a scheduler cycle.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="76"/>
+        <source>时间格式无效，请使用 YYYY-MM-DD HH:MM:SS。</source>
+        <translation>Invalid time format. Use YYYY-MM-DD HH:MM:SS.</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="88"/>
+        <source>任务“{owner_func}”引用了未知的调度依赖“{related_func}”，该关系无法显示。</source>
+        <translation>Task “{owner_func}” references unknown scheduler dependency “{related_func}”; this relationship cannot be displayed.</translation>
     </message>
 </context>
 </TS>

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <!DOCTYPE TS>
 <TS version="2.1" language="ja_JP" sourcelanguage="zh_CN">
 <context>
@@ -600,6 +600,11 @@
         <source>设置编队方式及复制通关队伍限制</source>
         <translation>編成方法とクリア編成のコピー制限を設定します</translation>
     </message>
+<message>
+        <location filename="../util/config_translation.py" line="111"/>
+        <source>日服PC端</source>
+        <translation>日本版PCクライアント</translation>
+    </message>
 </context>
 <context>
     <name>CreateErrorInfoMessageBox</name>
@@ -779,12 +784,12 @@
     <message>
         <location filename="../components/expand/exploreConfig.py" line="19"/>
         <source>使用简易模式推图</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
     <message>
         <location filename="../components/expand/exploreConfig.py" line="22"/>
         <source>简易模式只需要一支成形队伍, 角色较少时建议使用(默认使用第一支队伍)</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -1050,7 +1055,7 @@
     </message>
     <message>
         <location filename="../components/expand/mainlinePriority.py" line="21"/>
-        <source>普通关卡与次数（如&quot;1-1-1,1-2-3&quot;表示关卡1-1打一次，然后关卡1-2打三次）：</source>
+        <source>普通关卡与次数（如"1-1-1,1-2-3"表示关卡1-1打一次，然后关卡1-2打三次）：</source>
         <translation>普通のステージ名時間(例:「1-1-1、1-2-3」は、レベルが1-1で1回プレイされ、その後、レベルが1-2で3回プレイされることを意味します):</translation>
     </message>
     <message>
@@ -2142,6 +2147,31 @@ nemu の使用が推奨され、nemu を使用している場合は、「エミ�
         <source>当BAAS新增调度任务时的启用状态</source>
         <translation>BAASで新しいスケジューリングタスクが追加された際の有効状態</translation>
     </message>
+<message>
+        <location filename="../fragments/process.py" line="88"/>
+        <source>表格视图</source>
+        <translation type="obsolete">表形式ビュー</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="309"/>
+        <source>图形视图</source>
+        <translation>グラフビュー</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="309"/>
+        <source>图形视图需要安装 NodeGraphQt</source>
+        <translation>グラフビューには NodeGraphQt のインストールが必要です</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="256"/>
+        <source>切换到图形视图</source>
+        <translation>グラフビューに切り替える</translation>
+    </message>
+    <message>
+        <location filename="../fragments/process.py" line="259"/>
+        <source>切换到表格视图</source>
+        <translation>表形式ビューに切り替える</translation>
+    </message>
 </context>
 <context>
     <name>PushConfig</name>
@@ -2168,7 +2198,7 @@ nemu の使用が推奨され、nemu を使用している場合は、「エミ�
     <message>
         <location filename="../components/expand/pushConfig.py" line="29"/>
         <source>飞书推送</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -2262,7 +2292,7 @@ nemu の使用が推奨され、nemu を使用している場合は、「エミ�
     <message>
         <location filename="../components/expand/serverConfig.py" line="33"/>
         <source>日服PC端</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished"/>
     </message>
 </context>
 <context>
@@ -2727,6 +2757,154 @@ nemu の使用が推奨され、nemu を使用している場合は、「エミ�
         <location filename="../components/template_card.py" line="1"/>
         <source>打开配置失败</source>
         <translation>設定を開けませんでした</translation>
+    </message>
+</context>
+<context>
+    <name>SchedulerGraphView</name>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="234"/>
+        <source>前置任务</source>
+        <translation>前提タスク</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="237"/>
+        <source>作为前置任务</source>
+        <translation>前提タスクとして使用</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="240"/>
+        <source>作为后置任务</source>
+        <translation>後続タスクとして使用</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="243"/>
+        <source>后置任务</source>
+        <translation>後続タスク</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="274"/>
+        <source>启用</source>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="280"/>
+        <source>下次执行时间</source>
+        <translation>次回実行時刻</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="436"/>
+        <source>调度关系无效</source>
+        <translation type="obsolete">スケジューラー関係が無効です</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="492"/>
+        <source>时间格式无效，请使用 YYYY-MM-DD HH:MM:SS</source>
+        <translation type="obsolete">時刻の形式が無効です。YYYY-MM-DD HH:MM:SS を使用してください</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="381"/>
+        <source>调度配置保存失败</source>
+        <translation type="obsolete">スケジューラー設定の保存に失敗しました</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="345"/>
+        <source>调度配置包含无法显示的任务关系</source>
+        <translation type="obsolete">スケジューラー設定には表示できないタスク関係が含まれています</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="345"/>
+        <source>调度配置中已存在循环依赖</source>
+        <translation type="obsolete">スケジューラー設定に循環依存が既に存在します</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="37"/>
+        <source>无法读取调度事件配置。</source>
+        <translation>スケジューラーイベント設定を読み込めませんでした。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="40"/>
+        <source>调度事件配置的格式无效。</source>
+        <translation>スケジューラーイベント設定の形式が無効です。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="43"/>
+        <source>调度事件配置缺少必需字段。</source>
+        <translation>スケジューラーイベント設定に必須フィールドがありません。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="46"/>
+        <source>调度事件配置包含无效字段值。</source>
+        <translation>スケジューラーイベント設定に無効なフィールド値が含まれています。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="52"/>
+        <source>调度图布局包含无效的节点坐标。</source>
+        <translation>スケジューラーグラフのレイアウトに無効なノード座標が含まれています。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="58"/>
+        <source>调度关系类型“{kind}”无效。</source>
+        <translation>スケジューラー関係の種類「{kind}」は無効です。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="64"/>
+        <source>调度任务“{func_name}”不能依赖自身。</source>
+        <translation>スケジューラータスク「{func_name}」は自身に依存できません。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="73"/>
+        <source>只能连接或断开类型匹配的调度关系端口。</source>
+        <translation>種類が一致するスケジューラー関係ポートのみ接続または切断できます。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="79"/>
+        <source>调度配置保存失败。</source>
+        <translation>スケジューラー設定の保存に失敗しました。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="82"/>
+        <source>调度图加载失败。</source>
+        <translation>スケジューラーグラフの読み込みに失敗しました。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="91"/>
+        <source>调度配置中已存在循环依赖。</source>
+        <translation>スケジューラー設定には循環依存が既に存在します。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="49"/>
+        <source>调度事件配置包含重复的任务标识“{func_name}”。</source>
+        <translation>スケジューラーイベント設定に重複したタスク識別子「{func_name}」があります。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="55"/>
+        <source>调度任务“{func_name}”不存在于事件配置中。</source>
+        <translation>スケジューラーイベント設定にタスク「{func_name}」が存在しません。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="61"/>
+        <source>调度关系引用了不存在的任务“{func_name}”。</source>
+        <translation>スケジューラー関係が存在しないタスク「{func_name}」を参照しています。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="67"/>
+        <source>任务“{owner_func}”与“{related_func}”之间已存在相同的调度关系。</source>
+        <translation>「{owner_func}」と「{related_func}」の間には同じスケジューラー関係が既に存在します。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="70"/>
+        <source>连接任务“{owner_func}”与“{related_func}”会形成循环依赖。</source>
+        <translation>タスク「{owner_func}」と「{related_func}」を接続すると循環依存が発生します。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="76"/>
+        <source>时间格式无效，请使用 YYYY-MM-DD HH:MM:SS。</source>
+        <translation>時刻の形式が無効です。YYYY-MM-DD HH:MM:SS を使用してください。</translation>
+    </message>
+    <message>
+        <location filename="../components/scheduler_graph.py" line="88"/>
+        <source>任务“{owner_func}”引用了未知的调度依赖“{related_func}”，该关系无法显示。</source>
+        <translation>タスク「{owner_func}」は不明なスケジューラー依存先「{related_func}」を参照しているため、この関係は表示できません。</translation>
     </message>
 </context>
 </TS>
