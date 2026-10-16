@@ -10,7 +10,8 @@ import pytest
 
 from core import color, image, position
 from service.image_compat import (
-    _match_gift_close_anchor, _match_local_template, install_popup_image_compat,
+    _match_gift_close_anchor, _match_local_template, _match_shop_tab_offset,
+    install_popup_image_compat,
 )
 
 
@@ -337,3 +338,155 @@ def test_gift_patch_keeps_original_first_and_cn_gift_scope(monkeypatch):
     context.identifier = "JP"
     assert not color.match_rgb_feature(context, "gift")
     assert calls == ["already_matched", "gift", "cafe", "gift"]
+
+
+SHOP_TAB_LIMITS = {
+    "temp_shop_not_selected": [245, 255, 245, 255, 245, 255],
+    "temp_shop_selected": [35, 55, 60, 80, 89, 109],
+}
+
+
+def _shop_tab_context(name="temp_shop_not_selected", *, ratio=1, shifts=(5,) * 4,
+                      top=248, horizontal_shift=0):
+    screenshot = np.zeros((round(720 * ratio), round(1280 * ratio), 3), dtype=np.uint8)
+    points = [[1, top], [1, top + 35], [206, top], [206, top + 35]]
+    limits = SHOP_TAB_LIMITS[name]
+    rgb = [(limits[index] + limits[index + 1]) // 2 for index in (0, 2, 4)]
+    for (x, y), shift in zip(points, shifts):
+        row, col = int((y + shift) * ratio), int((x + horizontal_shift) * ratio)
+        if 0 <= row < screenshot.shape[0] and 0 <= col < screenshot.shape[1]:
+            screenshot[row, col] = rgb[::-1]
+    return SimpleNamespace(
+        latest_img_array=screenshot, ratio=ratio, identifier="CN",
+        rgb_feature={name: [points, [limits.copy() for _ in points]]},
+    )
+
+
+@pytest.mark.parametrize("name", SHOP_TAB_LIMITS)
+@pytest.mark.parametrize("ratio", [0.5, 0.75, 1, 1.5, 2])
+@pytest.mark.parametrize("shift", [-6, -5, 5, 6])
+def test_shop_tab_fallback_moves_all_four_anchors_with_the_same_small_offset(name, ratio, shift):
+    context = _shop_tab_context(name, ratio=ratio, shifts=(shift,) * 4)
+    assert not color.match_rgb_feature(context, name)
+    assert _match_shop_tab_offset(context, name, color.rgb_in_range)
+
+
+@pytest.mark.parametrize("name", SHOP_TAB_LIMITS)
+@pytest.mark.parametrize("kwargs", [
+    {"shifts": (7,) * 4}, {"shifts": (-7,) * 4},
+    {"shifts": (-5, -2, 2, 5)}, {"shifts": (5, 5, 5)},
+    {"horizontal_shift": 2}, {"top": 1, "shifts": (-6,) * 4},
+    {"top": 684, "shifts": (6,) * 4},
+])
+def test_shop_tab_fallback_rejects_distant_scattered_incomplete_and_out_of_frame_anchors(name, kwargs):
+    context = _shop_tab_context(name, **kwargs)
+    assert not _match_shop_tab_offset(context, name, color.rgb_in_range)
+
+
+@pytest.mark.parametrize("name", SHOP_TAB_LIMITS)
+def test_shop_tab_fallback_preserves_selected_state_and_original_rgb_ranges(name):
+    other = next(candidate for candidate in SHOP_TAB_LIMITS if candidate != name)
+    context = _shop_tab_context(other)
+    context.rgb_feature[name] = _shop_tab_context(name).rgb_feature[name]
+    assert not _match_shop_tab_offset(context, name, color.rgb_in_range)
+    context = _shop_tab_context(name)
+    pixel = context.latest_img_array[253, 1]
+    pixel[2] = SHOP_TAB_LIMITS[name][0] - 1
+    assert not _match_shop_tab_offset(context, name, color.rgb_in_range)
+
+
+@pytest.mark.parametrize("malformation", [
+    "missing", "outer", "point_count", "limits_count", "rectangle_width",
+    "rectangle_height", "point_order", "float_point", "wrong_limits", "float_limit",
+    "negative_top", "bottom_outside", "non_point", "non_limits",
+])
+def test_shop_tab_fallback_ignores_malformed_temporary_features(malformation):
+    name = "temp_shop_not_selected"
+    context = _shop_tab_context(name)
+    points, limits = context.rgb_feature[name]
+    if malformation == "missing":
+        context.rgb_feature.clear()
+    elif malformation == "outer":
+        context.rgb_feature[name] = None
+    elif malformation == "point_count":
+        points.pop()
+    elif malformation == "limits_count":
+        limits.pop()
+    elif malformation == "rectangle_width":
+        points[2][0] -= 1
+    elif malformation == "rectangle_height":
+        points[1][1] -= 1
+    elif malformation == "point_order":
+        points[1], points[2] = points[2], points[1]
+    elif malformation == "float_point":
+        points[0][0] = 1.0
+    elif malformation == "wrong_limits":
+        limits[0][0] -= 1
+    elif malformation == "float_limit":
+        limits[0][0] = 245.0
+    elif malformation == "negative_top":
+        context = _shop_tab_context(name, top=-1)
+    elif malformation == "bottom_outside":
+        context = _shop_tab_context(name, top=685)
+    elif malformation == "non_point":
+        points[0] = None
+    elif malformation == "non_limits":
+        limits[0] = None
+    assert not _match_shop_tab_offset(context, name, color.rgb_in_range)
+
+
+@pytest.mark.parametrize("ratio", [0, -1, float("nan"), float("inf"), False, None, "1"])
+def test_shop_tab_fallback_rejects_invalid_screen_ratio(ratio):
+    context = _shop_tab_context()
+    context.ratio = ratio
+    assert not _match_shop_tab_offset(context, "temp_shop_not_selected", color.rgb_in_range)
+
+
+@pytest.mark.parametrize("screenshot", [None, np.zeros((720, 1280), dtype=np.uint8),
+                                         np.zeros((720, 1280, 2), dtype=np.uint8),
+                                         np.zeros((720, 720, 3), dtype=np.uint8)])
+def test_shop_tab_fallback_rejects_missing_or_inconsistent_screen_dimensions(screenshot):
+    context = _shop_tab_context()
+    context.latest_img_array = screenshot
+    assert not _match_shop_tab_offset(context, "temp_shop_not_selected", color.rgb_in_range)
+
+
+def test_shop_tab_patch_keeps_original_first_and_limits_scope_to_cn_temporary_tabs(monkeypatch):
+    calls = []
+
+    def original(context, name):
+        calls.append(name)
+        return name == "already_matched"
+
+    monkeypatch.setattr(color, "match_rgb_feature", original)
+    install_popup_image_compat()
+    context = _shop_tab_context()
+    assert color.match_rgb_feature(context, "already_matched")
+    assert color.match_rgb_feature(context, "temp_shop_not_selected")
+    context.rgb_feature["another_feature"] = context.rgb_feature["temp_shop_not_selected"]
+    assert not color.match_rgb_feature(context, "another_feature")
+    for identifier in ("JP", "Global"):
+        context.identifier = identifier
+        assert not color.match_rgb_feature(context, "temp_shop_not_selected")
+    assert calls == ["already_matched", "temp_shop_not_selected", "another_feature",
+                     "temp_shop_not_selected", "temp_shop_not_selected"]
+
+
+def test_shop_tab_patch_preserves_original_success_without_touching_fallback(monkeypatch):
+    monkeypatch.setattr(color, "match_rgb_feature", lambda *args: True)
+    monkeypatch.setattr(color, "rgb_in_range", lambda *args: pytest.fail("Original already matched"))
+    install_popup_image_compat()
+    assert color.match_rgb_feature(_shop_tab_context(), "temp_shop_not_selected")
+
+
+def test_shop_tab_patch_does_not_swallow_original_cancellation(monkeypatch):
+    class Cancelled(Exception):
+        pass
+
+    def original(*args):
+        raise Cancelled()
+
+    monkeypatch.setattr(color, "match_rgb_feature", original)
+    install_popup_image_compat()
+    with pytest.raises(Cancelled):
+        color.match_rgb_feature(_shop_tab_context(), "temp_shop_not_selected")

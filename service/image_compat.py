@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import wraps
+from math import isfinite
 
 
 _CN_LOCAL_IMAGE_PADDING = {
@@ -28,6 +29,53 @@ _CN_SCALED_CRAFTING_BUTTONS = {
     "create_start-phase-1-bright", "create_start-phase-1-grey",
     "create_select-node", "create_start-crafting",
 }
+
+
+_CN_SHOP_TAB_RGB_LIMITS = {
+    "temp_shop_not_selected": (245, 255, 245, 255, 245, 255),
+    "temp_shop_selected": (35, 55, 60, 80, 89, 109),
+}
+
+
+def _match_shop_tab_offset(context, name, rgb_in_range):
+    """Move the four CN shop-tab anchors together after a small OCR y offset."""
+    expected_limits = _CN_SHOP_TAB_RGB_LIMITS.get(name)
+    feature = context.rgb_feature.get(name)
+    if (expected_limits is None or not isinstance(feature, (list, tuple))
+            or len(feature) != 2):
+        return False
+    points, limits = feature
+    if (not isinstance(points, (list, tuple)) or len(points) != 4
+            or not isinstance(limits, (list, tuple)) or len(limits) != 4):
+        return False
+    for point, bounds in zip(points, limits):
+        if (not isinstance(point, (list, tuple)) or len(point) != 2
+                or any(type(value) is not int for value in point)
+                or not isinstance(bounds, (list, tuple))
+                or any(type(value) is not int for value in bounds)
+                or tuple(bounds) != expected_limits):
+            return False
+    top = points[0][1]
+    if tuple(map(tuple, points)) != ((1, top), (1, top + 35), (206, top), (206, top + 35)):
+        return False
+    if not 0 <= top < top + 35 < 720:
+        return False
+    screenshot, ratio = context.latest_img_array, context.ratio
+    if (screenshot is None or getattr(screenshot, "ndim", 0) != 3 or screenshot.shape[2] < 3
+            or not isinstance(ratio, (int, float)) or isinstance(ratio, bool)
+            or not isfinite(ratio) or ratio <= 0):
+        return False
+    height, width = screenshot.shape[:2]
+    if abs(width - 1280 * ratio) > 1 or abs(height - 720 * ratio) > 1:
+        return False
+    for distance in range(1, 7):
+        for dy in (-distance, distance):
+            if all(0 <= int((y + dy) * ratio) < height and 0 <= int(x * ratio) < width
+                   and y + dy >= 0
+                   and rgb_in_range(context, x, y + dy, *bounds)
+                   for (x, y), bounds in zip(points, limits)):
+                return True
+    return False
 
 
 def _match_local_template(context, template, area, threshold, rgb_diff, compare_rgb, padding=6):
@@ -165,9 +213,13 @@ def install_popup_image_compat() -> None:
     @wraps(original)
     def match_rgb_feature(context, name):
         matched = original(context, name)
-        if matched or name != "gift" or context.identifier != "CN":
+        if matched or context.identifier != "CN":
             return matched
-        return _match_gift_close_anchor(context, color.rgb_in_range)
+        if name == "gift":
+            return _match_gift_close_anchor(context, color.rgb_in_range)
+        if name in _CN_SHOP_TAB_RGB_LIMITS:
+            return _match_shop_tab_offset(context, name, color.rgb_in_range)
+        return matched
 
     match_rgb_feature._baas_popup_compat = True
     color.match_rgb_feature = match_rgb_feature
