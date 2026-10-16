@@ -1,6 +1,4 @@
 from random import random
-import shutil
-import subprocess
 import threading
 import time
 import traceback
@@ -12,83 +10,22 @@ from qfluentwidgets import TableWidget
 
 from gui.util.customized_ui import PureWindow
 
-NONINTERACTIVE_GIT_CONFIG = [
-    "-c", "credential.helper=",
-    "-c", "credential.interactive=never",
-    "-c", "core.askPass=echo",
-    "-c", "core.sshCommand=ssh -o BatchMode=yes",
-]
-
-
-def _noninteractive_git_env():
-    """Return a Git environment that prevents GUI credential prompts."""
-    import os
-
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GCM_INTERACTIVE"] = "never"
-    env["GCM_MODAL_PROMPT"] = "0"
-    env["GIT_ASKPASS"] = "echo"
-    env["SSH_ASKPASS"] = "echo"
-    return env
-
-
-def _read_history_with_git(repo_path):
-    """Read commit history with the system git executable."""
-    git_executable = shutil.which("git")
-    if not git_executable:
-        raise FileNotFoundError("System git not found")
-    result = subprocess.run(
-        [
-            git_executable,
-            *NONINTERACTIVE_GIT_CONFIG,
-            "log",
-            "--date=format:%Y-%m-%d %H:%M:%S",
-            "--pretty=format:%h%x1f%an%x1f%ad%x1f%s%x1e",
-        ],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_noninteractive_git_env(),
-    )
-    entries = []
-    for raw_entry in result.stdout.split("\x1e"):
-        raw_entry = raw_entry.strip()
-        if not raw_entry:
-            continue
-        commit_id, author, commit_time, message = raw_entry.split("\x1f", 3)
-        entries.append({
-            'id': commit_id,
-            'author': author.strip(),
-            'date': commit_time,
-            'message': message.strip(),
-        })
-    return entries
-
-
-def _read_history_with_pygit2(repo_path):
-    """Read commit history with pygit2 when system git is unavailable."""
+def read_history_entries(repo_path):
+    """Read local history through pygit2, including merge commits."""
     import pygit2
 
-    repo = pygit2.Repository(repo_path)
-    entries = []
-    for commit in repo.walk(repo.head.target, pygit2.GIT_SORT_TIME):
-        entries.append({
+    repo = pygit2.Repository(str(repo_path))
+    try:
+        if repo.head_is_unborn:
+            return []
+        return [{
             'id': str(commit.id)[:6],
             'author': commit.author.name.strip(),
             'date': datetime.fromtimestamp(commit.commit_time).strftime("%Y-%m-%d %H:%M:%S"),
             'message': commit.message.strip(),
-        })
-    return entries
-
-
-def read_history_entries(repo_path):
-    """Read local commit history using system git first and pygit2 as fallback."""
-    try:
-        return _read_history_with_git(repo_path)
-    except Exception:
-        return _read_history_with_pygit2(repo_path)
+        } for commit in repo.walk(repo.head.target, pygit2.GIT_SORT_TIME)]
+    finally:
+        repo.free()
 
 
 class HistoryWindow(PureWindow):

@@ -1,0 +1,115 @@
+{
+  "benchmark": "LogManager log ingestion",
+  "created_at_utc": "2026-10-15T15:14:37.476730+00:00",
+  "python": "3.11.9",
+  "platform": "Windows-10-10.0.28000-SP0",
+  "records_per_sample": 10000,
+  "rounds": 5,
+  "warmup_records_per_implementation": 256,
+  "subscribers": 0,
+  "history_retained": true,
+  "timing_scope": "Preloaded queue ingestion, normalization, history retention, and empty broadcast fanout",
+  "excluded_from_timing": [
+    "Queue construction",
+    "Output validation",
+    "Service startup",
+    "Transport",
+    "UI"
+  ],
+  "baseline": "Original per-record asyncio.to_thread(source.get) pump in BaselineLogManager",
+  "optimized": "Current service.utils.logging.LogManager pump",
+  "round_results": [
+    {
+      "round": 1,
+      "order": [
+        "baseline",
+        "optimized"
+      ],
+      "elapsed_ms": {
+        "baseline": 853.5459999984596,
+        "optimized": 43.56029999325983
+      }
+    },
+    {
+      "round": 2,
+      "order": [
+        "optimized",
+        "baseline"
+      ],
+      "elapsed_ms": {
+        "optimized": 43.4716000163462,
+        "baseline": 808.3691000065301
+      }
+    },
+    {
+      "round": 3,
+      "order": [
+        "baseline",
+        "optimized"
+      ],
+      "elapsed_ms": {
+        "baseline": 850.778399995761,
+        "optimized": 43.64399999030866
+      }
+    },
+    {
+      "round": 4,
+      "order": [
+        "optimized",
+        "baseline"
+      ],
+      "elapsed_ms": {
+        "optimized": 44.04990002512932,
+        "baseline": 801.7207000229973
+      }
+    },
+    {
+      "round": 5,
+      "order": [
+        "baseline",
+        "optimized"
+      ],
+      "elapsed_ms": {
+        "baseline": 755.9456000162754,
+        "optimized": 42.09189998800866
+      }
+    }
+  ],
+  "samples_ms": {
+    "baseline": [
+      853.5459999984596,
+      808.3691000065301,
+      850.778399995761,
+      801.7207000229973,
+      755.9456000162754
+    ],
+    "optimized": [
+      43.56029999325983,
+      43.4716000163462,
+      43.64399999030866,
+      44.04990002512932,
+      42.09189998800866
+    ]
+  },
+  "median_ms": {
+    "baseline": 808.3691000065301,
+    "optimized": 43.56029999325983
+  },
+  "median_speedup": 18.55747320683307,
+  "limitations": [
+    "Synthetic no-subscriber benchmark; does not represent UI latency or end-to-end transport throughput.",
+    "Measures an existing queue backlog, rather than sparse live-log latency.",
+    "Both implementations run in one process on the same event loop and shared default executor; order alternates by round.",
+    "This benchmark does not compare WebSocket, named pipes, or shared memory."
+  ],
+  "command": [
+    "python",
+    "develop_tools/benchmark_log_delivery.py",
+    "--records",
+    "10000",
+    "--rounds",
+    "5",
+    "--output",
+    "docs\\performance\\log-pump-20261015.json"
+  ]
+}

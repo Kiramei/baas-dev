@@ -1,4 +1,3 @@
-import binascii
 import threading
 import time
 import webbrowser
@@ -15,11 +14,11 @@ from qfluentwidgets import (TableWidget, ComboBox, PrimaryPushButton, TextEdit,
 
 from core.utils import delay
 from deploy.installer.const import GetShaMethod, get_remote_sha_methods
+from deploy.installer.git_backend import remote_branch_sha
 from deploy.installer.mirrorc_update.const import MirrorCErrorCode
 from deploy.installer.mirrorc_update.mirrorc_updater import MirrorC_Updater, RequestReturn
 from gui.util.config_gui import COLOR_THEME, configGui
 from gui.util.notification import success, error
-from service.update.checks import _git_wrapper_get_latest_sha
 
 
 class TestGetRemoteShaMethodWorker(QThread):
@@ -74,7 +73,10 @@ class TestGetRemoteShaMethodWorker(QThread):
 
     @staticmethod
     def pygit2_get_latest_sha(data):
-        return _git_wrapper_get_latest_sha(data, timeout=3.0)
+        try:
+            return True, remote_branch_sha(data["url"], data["branch"], timeout=3.0)
+        except Exception as exc:
+            return False, str(exc)
 
 class MirrorCCDKTestThread(QThread):
     finished = pyqtSignal(RequestReturn, bool)
