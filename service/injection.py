@@ -634,4 +634,13 @@ def apply_service_injections() -> None:
         _patch_device_modules()
         _patch_baas_thread()
         _patch_cafe_reward()
+        from service.image_compat import install_popup_image_compat
+        from service.shop_compat import install_shop_compat
+        from service.gesture_compat import install_gesture_compat
+        from service.asset_compat import install_asset_compat
+
+        install_popup_image_compat()
+        install_shop_compat()
+        install_gesture_compat()
+        install_asset_compat()
         _APPLIED = True
