@@ -516,7 +516,7 @@ class ServiceRuntime:
         await run_blocking(self._android_display_guard.force_restore, None)
         return {"status": "stopped", "results": results}
 
-    async def solve_task(self, config_id: str, task_name: str, set_log=None, *, _plugin_cancel=None, _plugin_owner=None) -> Dict[str, Any]:
+    async def solve_task(self, config_id: str, task_name: str, set_log=None, *, _plugin_cancel=None, _plugin_owner=None, _plugin_handler=None) -> Dict[str, Any]:
         """Run one BAAS task in a daemon worker thread.
 
         Args:
@@ -564,10 +564,18 @@ class ServiceRuntime:
                         run_mode="single",
                     )
                     baas.flag_run = True
-                    failed = baas.send("solve", task_name) is False
-                except BaseException:
+                    if _plugin_handler is None:
+                        failed = baas.send("solve", task_name) is False
+                    else:
+                        result = _plugin_handler(baas)
+                        _plugin_owner["result"] = result
+                        failed = result is False
+                except BaseException as exc:
                     failed = True
-                    raise
+                    if _plugin_owner is not None:
+                        _plugin_owner["error"] = exc
+                    else:
+                        raise
                 finally:
                     self._android_display_guard.release(baas.logger)
                     if _plugin_owner is not None:
@@ -604,13 +612,33 @@ class ServiceRuntime:
 
         if task_name not in DEVICE_TASKS:
             raise PluginError("UNSUPPORTED_TASK", "Device task is not supported by the plugin host.")
+        return await self._run_plugin_owned_task(config_id, task_name, set_log=set_log)
+
+    async def run_plugin_automation(self, config_id: str, plugin_id: str, action_id: str, settings: dict, set_log=None) -> Dict[str, Any]:
+        from .plugins.automation import HOST_ACTIONS, run_auto_push, run_hoard, validate_auto_settings
+        from .plugins.hoard_plan import build_hoard_plan
+        from .plugins.errors import require
+        require(action_id in HOST_ACTIONS.get(plugin_id, ()), "UNSUPPORTED_AUTOMATION", "Host automation is not supported.")
+        if plugin_id == "baas.hoard-ap":
+            plan = build_hoard_plan(settings)
+            if action_id == "plan":
+                return plan
+            require(plan["executable"], "MANUAL_STEP_REQUIRED", "Complete manual purchases or mailbox verification, then replan before starting.")
+            handler = lambda baas: run_hoard(baas, settings)
+        else:
+            validate_auto_settings(settings)
+            handler = lambda baas: run_auto_push(baas, action_id, settings)
+        return await self._run_plugin_owned_task(config_id, plugin_id + ":" + action_id, set_log=set_log, handler=handler)
+
+    async def _run_plugin_owned_task(self, config_id: str, task_name: str, set_log=None, *, handler=None) -> Dict[str, Any]:
+        from .plugins.errors import PluginError
         cancelled = threading.Event()
         owner = {}
         # Do not cancel an executor-backed device initialization halfway through:
         # its lock remains held until initialization finishes, then the cancellation
         # gate prevents the solver thread from starting.
         starting = asyncio.create_task(self.solve_task(config_id, task_name, set_log=set_log,
-                                                      _plugin_cancel=cancelled, _plugin_owner=owner))
+                                                      _plugin_cancel=cancelled, _plugin_owner=owner, _plugin_handler=handler))
         try:
             result = await asyncio.shield(starting)
             if result.get("status") == "already-running":
@@ -620,9 +648,12 @@ class ServiceRuntime:
                 await asyncio.sleep(0.1)
             if owner.get("stopped"):
                 raise asyncio.CancelledError
+            failure = owner.pop("error", None)
+            if isinstance(failure, PluginError):
+                raise failure
             if owner.get("failed"):
                 raise PluginError("DEVICE_TASK_FAILED", "The host device task did not complete successfully.")
-            return {"task": task_name, "completed": True}
+            return owner.pop("result", {"task": task_name, "completed": True})
         except asyncio.CancelledError:
             cancelled.set()
             if not starting.done():

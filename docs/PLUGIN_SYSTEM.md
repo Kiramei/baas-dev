@@ -31,6 +31,16 @@ Settings and action inputs use a deliberately restricted JSON Schema subset: obj
 
 An optional `contributions.home` array contains `{id, title, description?, action_id}` entries. Each entry references a declared action. The host may show a shortcut for an enabled plugin; opening it does not automatically execute the action. The manifest cannot inject arbitrary UI or override an existing application route. New execution kinds, permissions, schema features and contribution types require explicit host capability negotiation before use.
 
+## Bundled automation capability
+
+Hosts advertising `host.automation.v1` also accept `execution: "host_automation"` for a closed list of shipped tool/action pairs. These actions require `device.tasks` and declare neither an entry point nor a task name. External ZIPs cannot request this execution mode, even by copying a bundled ID. The host dispatches its own adapter, never Python loaded from the plugin package into the device process.
+
+`baas.auto-push` provides independent mission lists, story episodes and formation attributes. Its current-page actions recognize supported mission/story screens and stop on unknown pages. `baas.hoard-ap` provides a pure `plan` action and a `start` action that owns the profile until completion or cancellation, with a maximum seven-day deadline. It does not rewrite scheduler events: another task in that profile receives `already-running`/`DEVICE_BUSY`. Temporary task overrides are restored on success, failure and cancellation, while actual inventory updates remain persistent. Long timelines do not occupy a compute-worker slot. Backend restart requires the user to replan and start again.
+
+Hoarding results distinguish `available_at_target` from the projected remaining `summary`. The timeline tracks natural recovery caps, cafe capacity, server-day resets, already purchased AP and mail deadlines. Premium purchases, selective collection of an oversized mailbox and overflow gains that cannot be verified from the AP counter are manual steps. Such a plan reports `executable: false` with explicit warning codes; `start` rejects it before automation. The adapter requires fresh AP OCR and verifies each claimed gain, including small amounts, rather than treating the host's OCR fallback or a task's boolean return as proof of collection.
+
+String schemas may declare `format: "date-time"` as a rendering hint. The client edits local date/time and sends an ISO 8601 instant with an explicit time zone. The hoarding tool uses its separate `server_utc_offset_minutes` and `reset_hour` for game-day boundaries, so a browser sending UTC does not shift the reset time. Empty initial values remain editable; the automation adapter validates required dates, time zones and the bounded planning horizon. Other format names and nonstring formats are rejected.
+
 ## Authenticated commands
 
 All commands use the existing `CommandMessage` envelope on the authenticated trigger channel. A successful response retains `status: "ok"` and returns the following `data`. Errors retain `status: "error"`, a stable `code` and a human-readable `error` string. There is no unauthenticated plugin HTTP endpoint.

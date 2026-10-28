@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "api_version": 1,
+  "id": "baas.hoard-ap",
+  "version": "1.0.0",
+  "name": {
+    "en": "AP hoarding",
+    "zh": "囤体"
+  },
+  "description": {
+    "en": "Plan AP, cafe storage and expiring mail, then run verified nonoverflow steps exclusively on this profile. Premium purchases, mailbox overflow verification and selective mail collection are manual. Restarting the backend requires replanning.",
+    "zh": "规划体力、咖啡存量与临期邮件，并独占配置执行可验证的不溢出步骤。青辉石购买、邮箱溢出核验和指定邮件领取需手动；重启后需重新规划。"
+  },
+  "author": "BAAS contributors",
+  "permissions": [
+    "device.tasks"
+  ],
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "target_at": {
+        "type": "string",
+        "title": {
+          "en": "Spend at",
+          "zh": "花体时间"
+        },
+        "default": "",
+        "maxLength": 40,
+        "format": "date-time"
+      },
+      "strategy": {
+        "type": "string",
+        "title": {
+          "en": "Strategy",
+          "zh": "策略"
+        },
+        "default": "relaxed",
+        "enum": [
+          "relaxed",
+          "regeneration"
+        ]
+      },
+      "current_ap": {
+        "type": "integer",
+        "title": {
+          "en": "Current AP",
+          "zh": "当前体力"
+        },
+        "default": 160,
+        "minimum": 0,
+        "maximum": 999
+      },
+      "soft_cap": {
+        "type": "integer",
+        "title": {
+          "en": "Natural recovery cap",
+          "zh": "自然恢复上限"
+        },
+        "default": 160,
+        "minimum": 1,
+        "maximum": 999
+      },
+      "reset_hour": {
+        "type": "integer",
+        "title": {
+          "en": "Server reset hour (game time zone)",
+          "zh": "日界小时（游戏时区）"
+        },
+        "default": 4,
+        "minimum": 0,
+        "maximum": 23
+      },
+      "server_utc_offset_minutes": {
+        "type": "integer",
+        "title": {
+          "en": "Game time zone (UTC offset minutes)",
+          "zh": "游戏时区（UTC偏移分钟）"
+        },
+        "description": {
+          "en": "480 = UTC+8; 540 = UTC+9. Independent of the browser time zone.",
+          "zh": "480为UTC+8，540为UTC+9；与浏览器时区独立。"
+        },
+        "default": 480,
+        "minimum": -720,
+        "maximum": 840
+      },
+      "tube_count": {
+        "type": "integer",
+        "title": {
+          "en": "Planned daily AP purchases (manual)",
+          "zh": "每日计划买管数（手动）"
+        },
+        "default": 0,
+        "minimum": 0,
+        "maximum": 6
+      },
+      "tube_days": {
+        "type": "integer",
+        "title": {
+          "en": "Purchase days",
+          "zh": "买管天数"
+        },
+        "default": 2,
+        "minimum": 1,
+        "maximum": 3
+      },
+      "purchases_today": {
+        "type": "integer",
+        "title": {
+          "en": "AP purchases already made today",
+          "zh": "今日已买管数"
+        },
+        "default": 0,
+        "minimum": 0,
+        "maximum": 6
+      },
+      "cafe_stock": {
+        "type": "integer",
+        "title": {
+          "en": "Current cafe AP",
+          "zh": "咖啡厅当前体力"
+        },
+        "default": 0,
+        "minimum": 0,
+        "maximum": 999
+      },
+      "cafe_rate": {
+        "type": "number",
+        "title": {
+          "en": "Cafe AP per hour",
+          "zh": "咖啡厅每小时体力"
+        },
+        "default": 30.8,
+        "minimum": 0,
+        "maximum": 100
+      },
+      "cafe_capacity": {
+        "type": "integer",
+        "title": {
+          "en": "Cafe AP capacity",
+          "zh": "咖啡厅容量"
+        },
+        "default": 740,
+        "minimum": 0,
+        "maximum": 999
+      },
+      "daily_ap": {
+        "type": "integer",
+        "title": {
+          "en": "Unclaimed daily mission AP",
+          "zh": "未领每日任务体力"
+        },
+        "default": 150,
+        "minimum": 0,
+        "maximum": 150
+      },
+      "club_ap": {
+        "type": "integer",
+        "title": {
+          "en": "Unclaimed club AP",
+          "zh": "未领小组体力"
+        },
+        "default": 10,
+        "minimum": 0,
+        "maximum": 10
+      },
+      "jjc_mode": {
+        "type": "string",
+        "title": {
+          "en": "Tactical challenge AP purchase",
+          "zh": "竞技场商店体力"
+        },
+        "default": "none",
+        "enum": [
+          "none",
+          "30",
+          "30_60"
+        ]
+      },
+      "jjc_refreshes": {
+        "type": "integer",
+        "title": {
+          "en": "Tactical challenge shop refreshes",
+          "zh": "竞技场商店刷新次数"
+        },
+        "default": 0,
+        "minimum": 0,
+        "maximum": 3
+      },
+      "claim_free_ap": {
+        "type": "boolean",
+        "title": {
+          "en": "Claim free daily AP",
+          "zh": "领取每日免费体力"
+        },
+        "default": true
+      },
+      "spend_task": {
+        "type": "string",
+        "title": {
+          "en": "Spend AP using profile settings",
+          "zh": "按当前配置花体"
+        },
+        "default": "activity_sweep",
+        "enum": [
+          "normal_task",
+          "hard_task",
+          "activity_sweep",
+          "clear_special_task_power",
+          "scrimmage"
+        ]
+      },
+      "spend_at_target": {
+        "type": "boolean",
+        "title": {
+          "en": "Spend AP automatically at target time",
+          "zh": "到点自动花体"
+        },
+        "default": false
+      },
+      "mail": {
+        "type": "array",
+        "title": {
+          "en": "AP mail (all AP mail must be listed)",
+          "zh": "体力邮件（需列出全部体力邮件）"
+        },
+        "default": [],
+        "maxItems": 64,
+        "items": {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "type": "integer",
+              "title": {
+                "en": "AP",
+                "zh": "体力"
+              },
+              "default": 1,
+              "minimum": 1,
+              "maximum": 999
+            },
+            "expires_at": {
+              "type": "string",
+              "title": {
+                "en": "Expires at",
+                "zh": "过期时间"
+              },
+              "default": "",
+              "maxLength": 40,
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "amount",
+            "expires_at"
+          ]
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "actions": [
+    {
+      "id": "plan",
+      "name": {
+        "en": "Build timeline",
+        "zh": "生成时间轴"
+      },
+      "execution": "host_automation",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "timeout_seconds": 30
+    },
+    {
+      "id": "start",
+      "name": {
+        "en": "Run hoarding timeline",
+        "zh": "执行囤体时间轴"
+      },
+      "execution": "host_automation",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "timeout_seconds": 604800
+    }
+  ]
+}

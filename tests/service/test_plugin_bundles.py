@@ -17,7 +17,7 @@ BUNDLED = ROOT / "service/plugins/bundled"
 
 
 def load_plugin(plugin_id, *, external=False):
-    directory = (ROOT / "examples/plugins" if external else BUNDLED) / plugin_id
+    directory = ROOT / "examples/plugins" / plugin_id
     manifest = json.loads((directory / "plugin.json").read_text(encoding="utf-8"))
     source = directory / "main.py"
     module = ModuleType(plugin_id.replace(".", "_"))
@@ -166,7 +166,7 @@ def test_direct_entrypoints_reject_invalid_divisor_settings(plugin_id, setting):
 def test_examples_run_in_the_actual_isolated_worker(plugin_id, external):
     manifest, _ = load_plugin(plugin_id, external=external)
     action = manifest["actions"][0]
-    directory = (ROOT / "examples/plugins" if external else BUNDLED) / plugin_id
+    directory = ROOT / "examples/plugins" / plugin_id
     request = {
         "entrypoint": action["entrypoint"],
         "context": {"api_version": 1, "plugin_id": plugin_id, "config_id": "test-profile",

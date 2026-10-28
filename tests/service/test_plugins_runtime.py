@@ -186,7 +186,7 @@ def test_shipping_bundled_manifests_use_supported_host_contract(tmp_path):
     manager = PluginManager(tmp_path, SimpleNamespace())
     catalog = asyncio.run(manager.catalog())
     assert catalog["errors"] == []
-    assert {p["id"] for p in catalog["plugins"]} >= {"baas.task-launcher"}
+    assert {p["id"] for p in catalog["plugins"]} >= {"baas.auto-push", "baas.hoard-ap", "baas.equipment-planner", "baas.inventory-calculator", "baas.home-editor"}
 
 
 @pytest.mark.parametrize("member", ["./plugins.json", "folder/../plugins.json", "plugins.json.", "plugins.json ", "folder//plugins.json"])
