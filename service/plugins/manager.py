@@ -379,7 +379,7 @@ class PluginManager:
                     operation = self._compute(job, package, action, inputs, settings)
                 elif action["execution"] == "host_automation":
                     require(package["source"] == "builtin", "UNSUPPORTED_AUTOMATION", "Host automation requires a bundled tool.")
-                    operation = self.runtime.run_plugin_automation(job["config_id"], job["plugin_id"], action["id"], settings, set_log=set_log)
+                    operation = self.runtime.run_plugin_automation(job["config_id"], job["plugin_id"], action["id"], settings, set_log=set_log, inputs=inputs)
                 else:
                     operation = self.runtime.run_plugin_device_task(job["config_id"], action["task_name"], set_log=set_log)
                 timeout = action.get("timeout_seconds", 30 if action["execution"] == "compute" else 1800)

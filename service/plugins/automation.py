@@ -5,6 +5,7 @@ Automation runs under the exact same owned-thread gate as single host tasks.
 """
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -14,10 +15,10 @@ import re
 import time
 
 from .errors import PluginError, require
-from .hoard_plan import build_hoard_plan, instant
+from .hoard_plan import HARD_CAP, MARGIN, build_hoard_plan, instant, public_hoard_plan, server_day, validate_mail_snapshot
 
 HOST_ACTIONS = {
-    'baas.hoard-ap': frozenset({'plan', 'start'}),
+    'baas.hoard-ap': frozenset({'plan', 'scan_mail', 'start'}),
     'baas.auto-push': frozenset({'normal', 'hard', 'story', 'activity_mission',
                                 'activity_story', 'activity_challenge', 'current_stage', 'current_story'}),
 }
@@ -151,10 +152,24 @@ def _sweep_rows(baas, normal):
     return rows
 
 
+def _run_host_task_once(baas, task):
+    """Resource actions must never replay the legacy solver's three retries."""
+    from core.Baas_thread import func_dict
+    from core.exception import FunctionCallTimeout, PackageIncorrect
+    _running(baas)
+    require(task in {'normal_task', 'hard_task', 'activity_sweep', 'clear_special_task_power', 'scrimmage', 'tactical_challenge_shop'},
+            'UNSUPPORTED_TASK', 'This task is not a bounded AP resource route.')
+    try:
+        return func_dict[task](baas)
+    except (FunctionCallTimeout, PackageIncorrect):
+        raise PluginError('DEVICE_TASK_INTERRUPTED', 'The resource route was interrupted; its actions will not be replayed.') from None
+
+
 def _clear_ap(baas, task, target):
     """Consume bounded runs of the chosen profile route, measuring each pass."""
     current = _read_ap(baas)
     for _ in range(5):
+        _running(baas)
         if current <= target:
             return current
         cost = 10 if task == 'normal_task' else 20 if task == 'hard_task' else 15 if task == 'scrimmage' else 40 if task == 'clear_special_task_power' else 10
@@ -194,9 +209,12 @@ def _clear_ap(baas, task, target):
             overrides['scrimmage_times'] = ','.join(str(count if i == selected else 0) for i in range(3))
         else:
             _activity_supported(baas, 'sweep')
-            overrides['activity_sweep_times'] = str(count)
+            # Legacy activity_sweep interprets >50 as max/all current AP.
+            # Keep each measured batch below that implicit mode switch.
+            overrides['activity_sweep_times'] = str(min(50, count))
         with configuration_overlay(baas, overrides):
-            require(baas.solve(task) is not False, 'DEVICE_TASK_FAILED', 'The selected spending route failed.')
+            _running(baas)
+            require(_run_host_task_once(baas, task) is not False, 'DEVICE_TASK_FAILED', 'The selected spending route failed.')
         after = _read_ap(baas)
         require(after < current, 'CLEAR_NO_PROGRESS', 'The spending route did not reduce AP; automation stopped.')
         current = after
@@ -204,54 +222,287 @@ def _clear_ap(baas, task, target):
     return current
 
 
-def run_hoard(baas, settings, *, clock=time.time, sleep=time.sleep):
-    # The device reading replaces the estimate; never clear based on a stale
-    # setting and never infer successful OCR from a fallback return value.
+_PUBLIC_MAIL_FIELDS = ('complete', 'observed_at', 'mailbox_count', 'parcels', 'total_ap', 'fingerprint')
+
+
+def _public_mail(snapshot):
+    # The internal roster includes anonymous non-AP attachments for verification;
+    # it is not needed in the client forecast or job history.
+    result = {key: deepcopy(snapshot[key]) for key in _PUBLIC_MAIL_FIELDS if key != 'parcels'}
+    result['parcels'] = [{**{key: row[key] for key in ('amount', 'expires_at', 'expires_before', 'expiry_precision', 'received_at', 'occurrence')},
+                          'id': row['id'][:32]} for row in snapshot['parcels']]
+    return result
+
+
+def _mail_adapter(mail_api):
+    if mail_api is None:
+        from . import hoard_mail
+        return hoard_mail
+    return mail_api
+
+
+def _running(baas):
+    require(bool(baas.flag_run), 'AUTOMATION_STOPPED', 'Automation was stopped.')
+
+
+def scan_hoard_mail(baas, settings=None, *, clock=time.time, sleep=time.sleep, mail_api=None):
+    """A fresh anonymous inventory; called only inside the host ownership gate."""
+    _running(baas)
+    snapshot = _mail_adapter(mail_api).scan_mailbox(baas, clock=clock, sleep=sleep)
+    validate_mail_snapshot(snapshot)
     actual = _read_ap(baas)
-    plan = build_hoard_plan({**settings, 'current_ap': actual}, now=datetime.fromtimestamp(clock(), timezone.utc))
-    require(plan['executable'], 'MANUAL_STEP_REQUIRED',
-            'This plan needs manual purchases or mailbox verification, including club reward delivery. Complete those steps and replan before automatic execution.')
-    completed = []
-    for step in plan['steps']:
-        deadline = instant(step['at']).timestamp()
+    _running(baas)
+    return {'kind': 'hoard_mail_scan', 'inventory_kind': 'verified', 'character_ap': actual,
+            **_public_mail(snapshot)}
+
+
+def _collect_hoard_source(baas, action, settings):
+    from . import hoard_sources
+    _running(baas)
+    if action == 'daily':
+        return _collect_daily_ap(baas, max_ap=settings['daily_ap'])
+    if action == 'free':
+        return hoard_sources.collect_free(baas)
+    if action == 'club':
+        return hoard_sources.collect_club(baas)
+    if action == 'cafe':
+        return hoard_sources.collect_cafe(baas)
+    prices = baas.static_config.tactical_challenge_shop_price_list[baas.server]
+    goods = [0] * len(prices)
+    indices = {str(row[0]).upper().replace(' ', ''): index for index, row in enumerate(prices)}
+    require('30AP' in indices and '60AP' in indices, 'UNSUPPORTED_SHOP', 'This server shop has no identifiable AP goods.')
+    goods[indices['30AP']] = 1
+    goods[indices['60AP']] = int(settings['jjc_mode'] == '30_60')
+    with configuration_overlay(baas, {'TacticalChallengeShopList': goods, 'TacticalChallengeShopRefreshTime': settings['jjc_refreshes']}):
+        return hoard_sources.collect_jjc(baas, settings)
+
+
+def _collect_daily_ap(baas, *, max_ap=150):
+    from .hoard_sources import collect_daily
+    return collect_daily(baas, max_ap=max_ap)
+
+
+def _free_ap_available(baas):
+    from .hoard_sources import free_available
+    return free_available(baas)
+
+
+def run_hoard(baas, settings, *, clock=time.time, sleep=time.sleep, mail_api=None):
+    """Run a forecast using fresh whole-parcel inventory after every delivery.
+
+    Forecast 24-hour overflow lifetimes never drive live mail actions. Only a
+    scanned expiry interval can schedule a withdrawal, and source-day receipts
+    prevent new mail or a rescan from replaying an already collected source.
+    """
+    api = _mail_adapter(mail_api)
+    actual = _read_ap(baas)
+    # Reject premium before scanning or claiming any source, even when called
+    # directly rather than via ServiceRuntime's preflight.
+    preflight = build_hoard_plan({**settings, 'current_ap': actual, 'mail': []},
+                                now=datetime.fromtimestamp(clock(), timezone.utc))
+    require(preflight['executable'], 'MANUAL_STEP_REQUIRED', 'Complete the explicitly manual premium purchases before starting.')
+    snapshot = None
+    historical_deadlines, historical_upper = {}, {}
+    completed, completed_sources, blocked_source_days = [], set(), set()
+
+    def observe():
+        _running(baas)
+        fresh = api.scan_mailbox(baas, clock=clock, sleep=sleep)
+        adopt(fresh)
+        return fresh
+
+    def adopt(fresh, *, removed_id=None):
+        nonlocal snapshot, historical_deadlines, historical_upper
+        validate_mail_snapshot(fresh)
+        old = [row for row in snapshot['parcels'] if row['id'] != removed_id] if snapshot else []
+        previous = Counter(row['identity'] for row in old)
+        current = Counter(row['identity'] for row in fresh['parcels'])
+        require(not previous - current, 'MAIL_LIST_CHANGED', 'An AP parcel disappeared without a verified withdrawal.')
+        deadlines, uppers = {}, {}
+        for identity in current:
+            old_rows = sorted((row for row in old if row['identity'] == identity), key=lambda row: row['occurrence'])
+            new_rows = sorted((row for row in fresh['parcels'] if row['identity'] == identity), key=lambda row: row['occurrence'])
+            for index, row in enumerate(new_rows):
+                lower, upper = instant(row['expires_at']).timestamp(), instant(row['expires_before']).timestamp()
+                if len(old_rows) == len(new_rows):
+                    # After a verified single removal, occurrence shifts are
+                    # known. Keep each surviving letter's own expiry history.
+                    candidates = old_rows[index:index + 1]
+                else:
+                    # Newly inserted identical mail cannot always be assigned
+                    # uniquely. Only overlapping expiry intervals share a
+                    # conservative bound; a distant long-lived copy does not.
+                    candidates = [item for item in old_rows
+                                  if historical_deadlines[item['id']] < upper
+                                  and lower < historical_upper[item['id']]]
+                if candidates:
+                    prior_low = min(historical_deadlines[item['id']] for item in candidates)
+                    prior_high = max(historical_upper[item['id']] for item in candidates)
+                    require(prior_low < upper and lower < prior_high, 'MAIL_LIST_CHANGED', 'An existing mail expiry changed incompatibly.')
+                    lower, upper = min(lower, prior_low), min(upper, prior_high)
+                deadlines[row['id']], uppers[row['id']] = lower, upper
+        historical_deadlines, historical_upper, snapshot = deadlines, uppers, fresh
+
+    def record(action, before, after, amount=0, **metadata):
+        _running(baas)
+        completed.append({'action': action, 'at': datetime.fromtimestamp(clock(), timezone.utc).isoformat(),
+                          'verified': True, 'ap': after, 'ap_before': before, 'ap_after': after,
+                          'amount': int(amount), 'mail_ap': snapshot['total_ap'], **metadata})
+
+    def clear(limit, reason):
+        before = _read_ap(baas)
+        if before <= limit:
+            return before
+        _running(baas)
+        after = _clear_ap(baas, settings['spend_task'], limit)
+        observe()  # A route may cross a day reset or allow new mail to arrive.
+        record('clear', before, after, before - after, reason=reason)
+        return after
+
+    def parcel_deadline(row):
+        return min(instant(row['expires_at']).timestamp(), historical_deadlines[row['id']]) - MARGIN.total_seconds()
+
+    def claim_one(row):
+        identity, amount = row['identity'], row['amount']
+        clear(HARD_CAP - amount, 'mail_headroom')
+        # Clearing can change the whole mailbox roster and invalidate locators.
+        fresh = observe()
+        candidates = [item for item in fresh['parcels'] if item['identity'] == identity and item['amount'] == amount]
+        require(bool(candidates), 'MAIL_LIST_CHANGED', 'The selected parcel disappeared before claiming.')
+        current = min(candidates, key=lambda item: (parcel_deadline(item), item['occurrence']))
+        _running(baas)
+        receipt = api.claim_ap_mail(baas, current['id'], read_ap=_read_ap, clock=clock, sleep=sleep)
+        require(receipt.get('verified') is True and receipt.get('claimed') is True
+                and receipt.get('id') == current['id'] and receipt.get('amount') == amount
+                and type(receipt.get('before_ap')) is int and type(receipt.get('after_ap')) is int
+                and receipt['after_ap'] - receipt['before_ap'] == amount and receipt['after_ap'] <= HARD_CAP,
+                'MAIL_CLAIM_UNVERIFIED', 'The whole parcel receipt could not be verified.')
+        adopt(receipt['after'], removed_id=current['id'])
+        record('mail', receipt['before_ap'], receipt['after_ap'], amount, mail_id=current['id'])
+
+    def urgent():
+        # Recompute after every single withdrawal. No all-claim and no deadline
+        # from the initial user-entered inventory participates in execution.
+        for _ in range(200):
+            rows = [row for row in snapshot['parcels'] if parcel_deadline(row) <= clock()]
+            if not rows:
+                return
+            claim_one(min(rows, key=lambda row: (parcel_deadline(row), instant(row['expires_before']), row['id'])))
+        require(not any(parcel_deadline(row) <= clock() for row in snapshot['parcels']),
+                'MAIL_LIST_CHANGED', 'Too many urgent letters arrived during execution.')
+
+    def wait_until(deadline):
+        last_scan = clock()
         while clock() < deadline:
-            require(baas.flag_run, 'AUTOMATION_STOPPED', 'Automation was stopped.')
-            sleep(min(0.25, max(0, deadline - clock())))
-        require(baas.flag_run, 'AUTOMATION_STOPPED', 'Automation was stopped.')
-        action = step['action']
-        if action == 'ready':
-            completed.append({'action': action, 'ap': _read_ap(baas)})
-            continue
-        if action in {'clear', 'spend'}:
-            ap = _clear_ap(baas, settings['spend_task'], step.get('target_ap', 9))
+            _running(baas)
+            urgent()
+            wake = min(deadline, last_scan + 60,
+                       min((parcel_deadline(row) for row in snapshot['parcels']), default=deadline))
+            while clock() < wake:
+                _running(baas)
+                sleep(min(.25, wake - clock()))
+            if clock() < deadline:
+                observe()
+                last_scan = clock()
+        observe()
+        urgent()
+
+    def source(action, estimated_amount):
+        _running(baas)
+        now = datetime.fromtimestamp(clock(), timezone.utc)
+        key = server_day(now, settings) + ':' + action
+        # Cafe's target withdrawal is an additional explicit user request, not a
+        # replay of the daily source, and can legitimately collect fresh stock.
+        if key in blocked_source_days:
+            return
+        if action == 'free' and _free_ap_available(baas):
+            clear(HARD_CAP - 10, 'free_ap_headroom')
+        before_mail = observe()
+        before_ap = _read_ap(baas)
+        key = server_day(datetime.fromtimestamp(clock(), timezone.utc), settings) + ':' + action
+        if key in blocked_source_days:
+            return
+        receipt = _collect_hoard_source(baas, action, {**settings, 'daily_ap': estimated_amount} if action == 'daily' else settings)
+        require(isinstance(receipt, dict) and receipt.get('verified') is True
+                and type(receipt.get('amount')) is int and receipt['amount'] >= 0
+                and isinstance(receipt.get('receipt'), str),
+                'SOURCE_NOT_VERIFIED', 'The AP source did not provide an exact amount and a recognized source-state receipt.')
+        _running(baas)
+        after_ap = _read_ap(baas)
+        after_mail = observe()
+        require(after_ap >= before_ap, 'SOURCE_NOT_VERIFIED', 'An AP source unexpectedly reduced character AP.')
+        added = after_mail['total_ap'] - before_mail['total_ap']
+        require(added >= 0, 'MAIL_DELIVERY_UNVERIFIED', 'Mail disappeared while checking the AP source.')
+        delivered = api.verify_mail_delivery(before_mail, after_mail, added)
+        require(sum(row['amount'] for row in delivered) == added,
+                'MAIL_DELIVERY_UNVERIFIED', 'The source mail amount could not be verified.')
+        gained = after_ap - before_ap + added
+        maximum = {'daily': estimated_amount, 'free': 10, 'club': 10, 'jjc': 90 * (settings['jjc_refreshes'] + 1), 'cafe': HARD_CAP}[action]
+        require(gained == receipt['amount'] and 0 <= gained <= maximum, 'SOURCE_NOT_VERIFIED',
+                'The actual AP delivery does not match the observed source receipt; the source will not be retried.')
+        if action in {'free', 'club'}:
+            require(gained in {0, 10}, 'SOURCE_NOT_VERIFIED', 'The free or club AP receipt must be exactly ten AP, or an explicit no-op.')
+        if action == 'club':
+            require(after_ap == before_ap and added == gained, 'SOURCE_NOT_VERIFIED', 'Club AP must be observed as a new whole mail parcel.')
+        final_key = server_day(datetime.fromtimestamp(clock(), timezone.utc), settings) + ':' + action
+        # A route spanning reset has an ambiguous reward day. Never replay it
+        # on either adjacent day, but report only the verified receipt once.
+        blocked_source_days.update((key, final_key))
+        completed_sources.add(final_key)
+        record(action, before_ap, after_ap, gained, source_key=final_key, estimated_amount=estimated_amount,
+               source_receipt=receipt['receipt'], skipped=receipt.get('skipped', gained == 0),
+               delivery='mail' if added and after_ap == before_ap else 'mixed' if added else 'character')
+        urgent()
+
+    initial = observe()
+    actual = _read_ap(baas)
+    plan = build_hoard_plan({**settings, 'current_ap': actual}, now=datetime.fromtimestamp(clock(), timezone.utc),
+                            mailbox_snapshot={**initial, 'character_ap': actual}, snapshot_provenance='live_scan')
+    # Mail and headroom generated by a forecast are deliberately excluded.
+    # Actual new parcel expiries are scheduled from subsequent observations.
+    events = [step for step in plan['steps'] if step['action'] in {'daily', 'free', 'club', 'jjc', 'ready'}
+              or (step['action'] == 'cafe' and instant(step['at']) < instant(plan['target_at']))
+              or (step['action'] == 'clear' and step.get('reason') == 'natural_recovery')]
+    urgent()
+    for step in events:
+        wait_until(instant(step['at']).timestamp())
+        if step['action'] == 'clear':
+            clear(step['target_ap'], 'natural_recovery')
+        elif step['action'] == 'ready':
+            value = _read_ap(baas)
+            record('ready', value, value)
         else:
-            before = _read_ap(baas)
-            require(before + step['amount'] <= 999, 'MAIL_VERIFICATION_REQUIRED',
-                    'Live AP would overflow into mail and cannot be verified by the AP counter. Check the mailbox and replan first.')
-            if action == 'cafe':
-                from module import cafe_reward
-                cafe_reward.to_cafe(baas, True)
-                cafe_reward.collect(baas)
-            else:
-                task = {'daily': 'collect_daily_power', 'free': 'collect_daily_free_power',
-                        'jjc': 'tactical_challenge_shop', 'mail': 'mail'}[action]
-                overrides = {}
-                if action == 'jjc':
-                    prices = baas.static_config.tactical_challenge_shop_price_list[baas.server]
-                    goods = [0] * len(prices)
-                    indices = {str(row[0]).upper().replace(' ', ''): i for i, row in enumerate(prices)}
-                    require('30AP' in indices and '60AP' in indices, 'UNSUPPORTED_SHOP', 'This server shop has no identifiable AP goods.')
-                    # Resolve by the current host catalog, whose order differs
-                    # between CN, Global and JP. Never use a fallback index.
-                    goods[indices['30AP']] = 1
-                    goods[indices['60AP']] = int(settings['jjc_mode'] == '30_60')
-                    overrides = {'TacticalChallengeShopList': goods, 'TacticalChallengeShopRefreshTime': settings['jjc_refreshes']}
-                with configuration_overlay(baas, overrides):
-                    require(baas.solve(task) is not False, 'DEVICE_TASK_FAILED', 'An AP source task failed.')
-            ap = _read_ap(baas)
-            require(ap < 999, 'MAIL_VERIFICATION_REQUIRED',
-                    'The AP counter reached its hard cap and cannot prove the full reward was received. Check the mailbox and replan before continuing.')
-            require(ap >= before + step['amount'], 'SOURCE_NOT_VERIFIED',
-                    'The expected AP gain could not be verified; check the source and replan.')
-        completed.append({'action': action, 'ap': ap})
-    return {'completed': True, 'steps': completed, 'plan': plan, 'actual_ap': _read_ap(baas)}
+            source(step['action'], step['amount'])
+    if settings['spend_at_target']:
+        clear(9, 'target_spend')
+        cafe_amount = plan['available_at_target']['cafe_ap']
+        if cafe_amount:
+            # Earlier days use a different server-day key. The target-day cafe
+            # has no earlier scheduled claim, so no daily source is replayed.
+            source('cafe', cafe_amount)
+            clear(9, 'target_spend')
+        for _ in range(200):
+            if not snapshot['parcels']:
+                break
+            row = min(snapshot['parcels'], key=lambda item: (parcel_deadline(item), item['id']))
+            claim_one(row)
+            clear(9, 'target_spend')
+        require(not snapshot['parcels'], 'MAIL_LIST_CHANGED', 'New mail kept arriving during target spending.')
+    final = observe()
+    actual = _read_ap(baas)
+    result = {'kind': 'hoard_execution', 'inventory_kind': 'verified', 'completed': True,
+            'actual_ap': actual, 'actual_mail_ap': final['total_ap'], 'actual_total_ap': actual + final['total_ap'],
+            'mailbox': {'kind': 'hoard_mail_scan', 'inventory_kind': 'verified', 'character_ap': actual, **_public_mail(final)}, 'completed_sources': sorted(completed_sources),
+            'steps': completed[-64:], 'steps_total': len(completed), 'steps_offset': max(0, len(completed) - 64),
+            'history_truncated': len(completed) > 64, 'plan': public_hoard_plan(plan, omit_steps=True)}
+    from .schema import json_size
+    while True:
+        try:
+            json_size(result)
+            return result
+        except PluginError as error:
+            if error.code != 'PAYLOAD_TOO_LARGE' or not result['steps']:
+                raise
+            result['steps'] = result['steps'][1:]
+            result['steps_offset'] += 1
+            result['history_truncated'] = True

@@ -614,17 +614,23 @@ class ServiceRuntime:
             raise PluginError("UNSUPPORTED_TASK", "Device task is not supported by the plugin host.")
         return await self._run_plugin_owned_task(config_id, task_name, set_log=set_log)
 
-    async def run_plugin_automation(self, config_id: str, plugin_id: str, action_id: str, settings: dict, set_log=None) -> Dict[str, Any]:
-        from .plugins.automation import HOST_ACTIONS, run_auto_push, run_hoard, validate_auto_settings
-        from .plugins.hoard_plan import build_hoard_plan
+    async def run_plugin_automation(self, config_id: str, plugin_id: str, action_id: str, settings: dict, set_log=None, *, inputs=None) -> Dict[str, Any]:
+        from .plugins.automation import HOST_ACTIONS, run_auto_push, run_hoard, scan_hoard_mail, validate_auto_settings
+        from .plugins.hoard_plan import build_hoard_plan, public_hoard_plan
         from .plugins.errors import require
         require(action_id in HOST_ACTIONS.get(plugin_id, ()), "UNSUPPORTED_AUTOMATION", "Host automation is not supported.")
         if plugin_id == "baas.hoard-ap":
-            plan = build_hoard_plan(settings)
             if action_id == "plan":
-                return plan
-            require(plan["executable"], "MANUAL_STEP_REQUIRED", "Complete manual purchases or mailbox verification, then replan before starting.")
-            handler = lambda baas: run_hoard(baas, settings)
+                return public_hoard_plan(build_hoard_plan(settings, mailbox_snapshot=(inputs or {}).get("mailbox_snapshot")))
+            if action_id == "scan_mail":
+                # Scanning has no target-time prerequisite, but is a real device
+                # operation and acquires precisely the same ownership gate.
+                handler = lambda baas: scan_hoard_mail(baas, settings)
+            else:
+                plan = build_hoard_plan({**settings, "mail": []})
+                require(plan["executable"], "MANUAL_STEP_REQUIRED", "Complete the explicitly manual premium purchases before starting.")
+                # Client snapshots are forecasts only. The executor scans again.
+                handler = lambda baas: run_hoard(baas, settings)
         else:
             validate_auto_settings(settings)
             handler = lambda baas: run_auto_push(baas, action_id, settings)

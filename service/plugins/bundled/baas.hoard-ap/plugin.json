@@ -2,14 +2,14 @@
   "schema_version": 1,
   "api_version": 1,
   "id": "baas.hoard-ap",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": {
     "en": "AP hoarding",
     "zh": "囤体"
   },
   "description": {
-    "en": "Plan AP, cafe storage and expiring mail, then run verified nonoverflow steps exclusively on this profile. Club reward mail, premium purchases, overflow verification and selective mail collection require manual verification. Restarting the backend requires replanning.",
-    "zh": "规划体力、咖啡存量与临期邮件，并独占配置执行可验证的不溢出步骤。小组签到邮件、青辉石购买、溢出核验和指定邮件领取需手动核对；重启后需重新规划。"
+    "en": "Plan AP and cafe storage, scan anonymous mailbox inventory, and execute source delivery and whole-letter collection with AP and mailbox verification. Premium purchases remain manual. Starting rescans the mailbox; restarting requires replanning.",
+    "zh": "规划体力与咖啡存量，扫描匿名邮件库存，并核验来源到账、整封逐封领取。青辉石购买仍需手动；开始时重新扫描邮箱，重启后需重新规划。"
   },
   "author": "BAAS contributors",
   "permissions": [
@@ -147,12 +147,16 @@
       "daily_ap": {
         "type": "integer",
         "title": {
-          "en": "Unclaimed daily mission AP",
-          "zh": "未领每日任务体力"
+          "en": "Today's daily mission AP limit",
+          "zh": "今日每日任务体力领取上限"
         },
         "default": 150,
         "minimum": 0,
-        "maximum": 150
+        "maximum": 150,
+        "description": {
+          "en": "Read the AP amount on each claimable daily task first. A card exceeding the remaining limit is not claimed. Future server days allow at most 150 AP.",
+          "zh": "先读取每日任务卡片的实际体力量；超过剩余上限的整项奖励不领取。未来游戏日最多领取150体力。"
+        }
       },
       "club_ap": {
         "type": "integer",
@@ -164,8 +168,8 @@
         "minimum": 0,
         "maximum": 10,
         "description": {
-          "en": "Only rewards not yet signed in today. Sign-in sends AP to mail; verify and list that mail, then set this to 0 before replanning. Future sign-ins still need verification.",
-          "zh": "仅填今日尚未签到的奖励。签到后核对并录入邮件，将此项改为0后重算；未来日期签到仍需核对。"
+          "en": "Only rewards not yet signed in today. Sign-in delivery is verified by a complete new mailbox scan; future sign-ins are forecast separately from verified stock.",
+          "zh": "仅填今日尚未签到的奖励。签到后完整扫描确认新增邮件；未来签到仅作预估，不计入已核验库存。"
         }
       },
       "jjc_mode": {
@@ -225,8 +229,8 @@
       "mail": {
         "type": "array",
         "title": {
-          "en": "AP mail (all AP mail must be listed)",
-          "zh": "体力邮件（需列出全部体力邮件）"
+          "en": "Estimated AP mail (a scan replaces this list)",
+          "zh": "预估体力邮件（扫描结果会替代此列表）"
         },
         "default": [],
         "maxItems": 64,
@@ -274,7 +278,137 @@
       "execution": "host_automation",
       "input_schema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "mailbox_snapshot": {
+            "type": "object",
+            "properties": {
+              "complete": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
+              },
+              "observed_at": {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              },
+              "mailbox_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 200
+              },
+              "parcels": {
+                "type": "array",
+                "maxItems": 200,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "identity": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "amount": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 999
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "format": "date-time"
+                    },
+                    "expires_before": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "format": "date-time"
+                    },
+                    "expiry_precision": {
+                      "type": "string",
+                      "enum": [
+                        "day",
+                        "hour",
+                        "minute",
+                        "second",
+                        "under-hour"
+                      ]
+                    },
+                    "expiry_uncertain": {
+                      "type": "boolean"
+                    },
+                    "received_at": {
+                      "type": "string",
+                      "maxLength": 10
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "mailbox-ocr"
+                      ]
+                    },
+                    "occurrence": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 199
+                    },
+                    "verified": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "amount",
+                    "expires_at",
+                    "expires_before",
+                    "expiry_precision",
+                    "received_at",
+                    "occurrence"
+                  ]
+                }
+              },
+              "total_ap": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 199800
+              },
+              "fingerprint": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "hoard_mail_scan"
+                ]
+              },
+              "inventory_kind": {
+                "type": "string",
+                "enum": [
+                  "verified"
+                ]
+              },
+              "character_ap": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 999
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "complete",
+              "observed_at",
+              "mailbox_count",
+              "parcels",
+              "total_ap",
+              "fingerprint"
+            ]
+          }
+        },
         "additionalProperties": false
       },
       "timeout_seconds": 30,
@@ -344,7 +478,9 @@
                 "verification": {
                   "type": "string",
                   "enum": [
-                    "manual_mail"
+                    "estimated",
+                    "verified",
+                    "scan_required"
                   ]
                 },
                 "target_ap": {
@@ -371,6 +507,14 @@
                 "pyroxene": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "mail_id": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "source_key": {
+                  "type": "string",
+                  "maxLength": 64
                 }
               },
               "additionalProperties": false,
@@ -457,6 +601,62 @@
               "type": "string",
               "maxLength": 128
             }
+          },
+          "inventory": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "estimate",
+                  "provided_snapshot",
+                  "live_scan"
+                ]
+              },
+              "verified_mail_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "estimated_mail_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "estimated_overflow_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pending_source_mail_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "observed_at": {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "provenance",
+              "verified_mail_ap",
+              "estimated_mail_ap",
+              "estimated_overflow_ap",
+              "pending_source_mail_ap"
+            ]
+          },
+          "steps_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "steps_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "history_truncated": {
+            "type": "boolean"
+          },
+          "steps_omitted": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false,
@@ -467,8 +667,160 @@
           "pending_mail_ap",
           "steps",
           "summary",
-          "warnings"
+          "warnings",
+          "inventory",
+          "available_at_target"
         ]
+      }
+    },
+    {
+      "id": "scan_mail",
+      "name": {
+        "en": "Scan mailbox",
+        "zh": "扫描邮箱"
+      },
+      "execution": "host_automation",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "complete": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "maxLength": 40,
+            "format": "date-time"
+          },
+          "mailbox_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 200
+          },
+          "parcels": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "identity": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "amount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 999
+                },
+                "expires_at": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                },
+                "expires_before": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                },
+                "expiry_precision": {
+                  "type": "string",
+                  "enum": [
+                    "day",
+                    "hour",
+                    "minute",
+                    "second",
+                    "under-hour"
+                  ]
+                },
+                "expiry_uncertain": {
+                  "type": "boolean"
+                },
+                "received_at": {
+                  "type": "string",
+                  "maxLength": 10
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "mailbox-ocr"
+                  ]
+                },
+                "occurrence": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 199
+                },
+                "verified": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "amount",
+                "expires_at",
+                "expires_before",
+                "expiry_precision",
+                "received_at",
+                "occurrence"
+              ]
+            }
+          },
+          "total_ap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 199800
+          },
+          "fingerprint": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hoard_mail_scan"
+            ]
+          },
+          "inventory_kind": {
+            "type": "string",
+            "enum": [
+              "verified"
+            ]
+          },
+          "character_ap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "complete",
+          "observed_at",
+          "mailbox_count",
+          "parcels",
+          "total_ap",
+          "fingerprint",
+          "kind",
+          "inventory_kind",
+          "character_ap"
+        ]
+      },
+      "timeout_seconds": 1800,
+      "description": {
+        "en": "Reads every mail page without collecting rewards. Large mailboxes can take several minutes.",
+        "zh": "逐页扫描所有邮件，不领取奖励。邮件较多时可能需要数分钟。"
       }
     },
     {

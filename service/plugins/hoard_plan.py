@@ -1,19 +1,21 @@
-"""Deterministic AP/cafe/mail timeline; no game imports or device side effects.
+"""Pure AP forecasts and indivisible mail scheduling, without game side effects.
 
-Unlike the retired Qt planner, sources, caps and deadlines are explicit data.
-Mail is collected as a whole because the host's mail task has no selective API.
+Only a complete mailbox observation supplies verified mail. Future source delivery
+and its lifetime are forecasts; the executor replaces them with fresh scans.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import heapq
 import math
+import re
 
 from .errors import PluginError, require
 
 HARD_CAP = 999
-MAIL_LIFETIME = timedelta(hours=24)
+MAIL_LIFETIME = timedelta(hours=24)  # Forecast only; never an execution deadline.
 MARGIN = timedelta(minutes=10)
+MAX_MAIL_PARCELS = 200
 
 
 def instant(value: str) -> datetime:
@@ -30,44 +32,117 @@ def tube_cost(count: int, already_bought: int = 0) -> int:
     return sum(30 if index < 3 else 60 for index in range(already_bought, already_bought + count))
 
 
-def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
-    server_zone = timezone(timedelta(minutes=settings['server_utc_offset_minutes']))
-    target = instant(settings['target_at']).astimezone(server_zone)
-    now = (now or datetime.now(timezone.utc)).astimezone(server_zone)
+def validate_mail_snapshot(snapshot: dict) -> dict:
+    """Validate the anonymous observation contract, without asserting freshness.
+
+    A caller-provided snapshot is useful for a pure forecast, never permission to
+    claim anything. Execution always reads a new observation from the device.
+    """
+    require(isinstance(snapshot, dict) and snapshot.get('complete') is True,
+            'INCOMPLETE_MAILBOX', 'A complete mailbox observation is required.')
+    observed = instant(snapshot.get('observed_at'))
+    parcels = snapshot.get('parcels')
+    count = snapshot.get('mailbox_count')
+    require(isinstance(parcels, list) and len(parcels) <= MAX_MAIL_PARCELS
+            and type(count) is int and len(parcels) <= count <= 200,
+            'INVALID_MAILBOX', 'The mailbox observation is outside supported bounds.')
+    require(isinstance(snapshot.get('fingerprint'), str)
+            and re.fullmatch(r'[0-9a-f]{64}', snapshot['fingerprint']) is not None,
+            'INVALID_MAILBOX', 'The mailbox fingerprint is invalid.')
+    identities = set()
+    for parcel in parcels:
+        require(isinstance(parcel, dict), 'INVALID_MAILBOX', 'A mail observation is invalid.')
+        for key in (('id', 'identity') if 'identity' in parcel else ('id',)):
+            require(isinstance(parcel.get(key), str) and re.fullmatch(r'[0-9a-f]{32}(?:[0-9a-f]{32})?', parcel[key]) is not None,
+                    'INVALID_MAILBOX', 'Mail identifiers must be anonymous digests.')
+        require(parcel['id'] not in identities, 'INVALID_MAILBOX', 'Mail locators must be unique.')
+        identities.add(parcel['id'])
+        require(type(parcel.get('amount')) is int and 1 <= parcel['amount'] <= HARD_CAP,
+                'INVALID_MAILBOX', 'Each AP parcel must fit into the character AP limit as a whole.')
+        low, high = instant(parcel.get('expires_at')), instant(parcel.get('expires_before'))
+        require(low < high and high > observed and parcel.get('expiry_precision') in {'day', 'hour', 'minute', 'second', 'under-hour'},
+                'INVALID_MAILBOX', 'Mail expiry must be a conservative, nonempty interval.')
+        require(parcel.get('source', 'mailbox-ocr') == 'mailbox-ocr' and type(parcel.get('occurrence')) is int
+                and parcel['occurrence'] >= 0 and isinstance(parcel.get('received_at'), str)
+                and re.fullmatch(r'\d{4}-\d{2}-\d{2}', parcel['received_at']) is not None,
+                'INVALID_MAILBOX', 'Mail provenance is incomplete.')
+        try:
+            datetime.fromisoformat(parcel['received_at'])
+        except ValueError:
+            raise PluginError('INVALID_MAILBOX', 'The mail received date is invalid.') from None
+    require(type(snapshot.get('total_ap')) is int
+            and snapshot['total_ap'] == sum(parcel['amount'] for parcel in parcels),
+            'INVALID_MAILBOX', 'The mailbox AP total does not match its parcels.')
+    if 'character_ap' in snapshot:
+        require(type(snapshot['character_ap']) is int and 0 <= snapshot['character_ap'] <= HARD_CAP,
+                'INVALID_MAILBOX', 'The observed character AP is invalid.')
+    return snapshot
+
+
+def server_day(at: datetime, settings: dict) -> str:
+    zone = timezone(timedelta(minutes=settings['server_utc_offset_minutes']))
+    local = at.astimezone(zone) - timedelta(hours=settings['reset_hour'])
+    return local.date().isoformat()
+
+
+def build_hoard_plan(settings: dict, *, now: datetime | None = None,
+                     mailbox_snapshot: dict | None = None,
+                     snapshot_provenance: str = 'provided_snapshot') -> dict:
+    zone = timezone(timedelta(minutes=settings['server_utc_offset_minutes']))
+    target = instant(settings['target_at']).astimezone(zone)
+    now = (now or datetime.now(timezone.utc)).astimezone(zone)
     require(now < target <= now + timedelta(days=7), 'INVALID_TARGET', 'Spend time must be in the next seven days.')
     require(settings['cafe_stock'] <= settings['cafe_capacity'], 'INVALID_SETTINGS', 'Cafe stock exceeds its capacity.')
     require(settings['purchases_today'] <= settings['tube_count'] or settings['tube_count'] == 0,
             'INVALID_SETTINGS', 'Purchases already made exceed the planned daily purchase count.')
-    steps, warnings, mail = [], [], []
-    events = []
+    require(snapshot_provenance in {'provided_snapshot', 'live_scan'}, 'INVALID_MAILBOX', 'Invalid snapshot provenance.')
+    if mailbox_snapshot is not None:
+        validate_mail_snapshot(mailbox_snapshot)
+    steps, warnings, mail, events = [], [], [], []
     sequence = 0
-    ap = float(settings['current_ap'])
-    cafe = float(settings['cafe_stock'])
-    clock = now
-    premium_cost = 0
-    pending_mail_ap = 0
-    discarded = 0
+    initial_ap = mailbox_snapshot.get('character_ap', settings['current_ap']) if mailbox_snapshot else settings['current_ap']
+    ap, cafe, clock = float(initial_ap), float(settings['cafe_stock']), now
+    premium_cost, pending_mail_ap, estimated_overflow, discarded = 0, 0, 0, 0
     executable = True
-    available_at_target = None
+    inventory = {'provenance': snapshot_provenance if mailbox_snapshot else 'estimate',
+                 'verified_mail_ap': mailbox_snapshot['total_ap'] if mailbox_snapshot else 0,
+                 'estimated_mail_ap': sum(row['amount'] for row in settings['mail']) if mailbox_snapshot is None else 0,
+                 'estimated_overflow_ap': 0, 'pending_source_mail_ap': 0}
+    if mailbox_snapshot:
+        inventory['observed_at'] = mailbox_snapshot['observed_at']
+        if snapshot_provenance == 'provided_snapshot':
+            warnings.append('MAILBOX_SNAPSHOT_REVALIDATED_ON_START')
+    else:
+        warnings.append('MAILBOX_SCAN_REQUIRED')
 
     def enqueue(at, action, amount=0, **metadata):
         nonlocal sequence
         sequence += 1
         heapq.heappush(events, (at, sequence, action, amount, metadata))
 
-    def add_mail(amount, expires):
+    def add_mail(amount, low, *, mail_id, verified=False, high=None):
         if amount:
-            mail.append({'amount': int(amount), 'expires_at': expires})
-            if expires - MARGIN < target:
-                enqueue(max(clock, expires - MARGIN), 'mail')
+            require(0 < amount <= HARD_CAP, 'INVALID_MAILBOX', 'A single mail parcel cannot be split to fit AP.')
+            parcel = {'id': mail_id, 'amount': int(amount), 'expires_at': low,
+                      'expires_before': high or low + timedelta(seconds=1), 'verified': verified}
+            mail.append(parcel)
+            if low - MARGIN <= target:
+                enqueue(max(clock, low - MARGIN), 'mail', amount,
+                        mail_id=mail_id, verification='verified' if verified else 'estimated')
 
-    for parcel in settings['mail']:
-        expires = instant(parcel['expires_at']).astimezone(server_zone)
-        require(expires > now, 'EXPIRED_MAIL', 'Remove expired mail before building a plan.')
-        add_mail(parcel['amount'], expires)
+    if mailbox_snapshot:
+        for parcel in mailbox_snapshot['parcels']:
+            require(instant(parcel['expires_before']) > now, 'STALE_MAILBOX', 'Scan the mailbox again before forecasting expired intervals.')
+            add_mail(parcel['amount'], instant(parcel['expires_at']), mail_id=parcel['id'],
+                     high=instant(parcel['expires_before']), verified=True)
+    else:
+        for index, parcel in enumerate(settings['mail']):
+            expires = instant(parcel['expires_at']).astimezone(zone)
+            require(expires > now, 'EXPIRED_MAIL', 'Remove expired mail before building a plan.')
+            add_mail(parcel['amount'], expires, mail_id='estimate:' + str(index))
+        if settings['mail']:
+            warnings.append('MAIL_EXPIRY_ESTIMATED')
 
-    # Browser date controls may transmit UTC Z. Server-day boundaries instead
-    # use the separately configured game zone, never the wire timestamp zone.
     day_start = now.replace(hour=settings['reset_hour'], minute=0, second=0, microsecond=0)
     if day_start > now:
         day_start -= timedelta(days=1)
@@ -77,28 +152,21 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
         day_start += timedelta(days=1)
     purchase_days = days[-settings['tube_days']:]
     for index, day in enumerate(days):
-        claim_at = max(now, min(day + timedelta(days=1) - MARGIN, target - timedelta(minutes=2)))
+        claim_at = max(now, day, min(day + timedelta(days=1) - MARGIN, target - timedelta(minutes=2)))
         if day in purchase_days and settings['tube_count']:
             already = settings['purchases_today'] if index == 0 else 0
             count = max(0, settings['tube_count'] - already)
             if count:
-                enqueue(claim_at - timedelta(seconds=1) if claim_at > now else now,
-                        'manual_purchase', count * 120, count=count, pyroxene=tube_cost(count, already))
+                enqueue(max(now, claim_at - timedelta(seconds=1)), 'manual_purchase', count * 120,
+                        count=count, pyroxene=tube_cost(count, already))
         daily = settings['daily_ap'] if index == 0 else 150
         club = settings['club_ap'] if index == 0 else 10
-        if settings['claim_free_ap']:
-            enqueue(claim_at, 'free', 10)
-        if daily:
-            enqueue(claim_at, 'daily', daily)
-        if club:
-            enqueue(claim_at, 'club', club)
-        jjc = {'none': 0, '30': 30, '30_60': 90}[settings['jjc_mode']] * (settings['jjc_refreshes'] + 1)
-        if jjc:
-            enqueue(claim_at, 'jjc', jjc)
-        # Keep the final cafe stock for the spend window, and collect earlier
-        # days before capping rather than inventing AP beyond cafe capacity.
+        for action, amount in [('free', 10 if settings['claim_free_ap'] else 0), ('daily', daily), ('club', club),
+                               ('jjc', {'none': 0, '30': 30, '30_60': 90}[settings['jjc_mode']] * (settings['jjc_refreshes'] + 1))]:
+            if amount:
+                enqueue(claim_at, action, amount, source_key=server_day(claim_at, settings) + ':' + action)
         if day + timedelta(days=1) < target:
-            enqueue(claim_at, 'cafe')
+            enqueue(claim_at, 'cafe', source_key=server_day(claim_at, settings) + ':cafe')
         if settings['strategy'] == 'regeneration' and day < target - timedelta(hours=24):
             enqueue(max(now, day + timedelta(minutes=1)), 'regenerate')
     enqueue(target, 'ready')
@@ -116,34 +184,36 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
     def emit(action, before, amount=0, **metadata):
         steps.append({'at': clock.isoformat(), 'action': action, 'amount': int(amount),
                       'ap_before': math.floor(before), 'ap_after': math.floor(ap),
-                      'mail_ap': sum(p['amount'] for p in mail), **metadata})
+                      'mail_ap': sum(row['amount'] for row in mail), **metadata})
 
     def clear_to(limit, reason):
         nonlocal ap
         if ap > limit:
             before = ap
-            # Sweeps consume indivisible AP. Planner uses a conservative
-            # lower bound; the executor measures the actual result with OCR.
             ap = max(0, math.floor(limit / 10) * 10)
-            emit('clear', before, before - ap, target_ap=math.floor(limit), reason=reason,
-                 task=settings['spend_task'])
+            emit('clear', before, before - ap, target_ap=math.floor(limit), reason=reason, task=settings['spend_task'])
 
     def gain(action, amount, direct=False, **metadata):
-        nonlocal ap, executable
+        nonlocal ap, estimated_overflow
         if direct:
             clear_to(HARD_CAP - amount, 'direct_purchase_headroom')
         before = ap
-        ap += amount
-        overflow = max(0, math.floor(ap - HARD_CAP))
+        overflow = max(0, math.floor(ap + amount - HARD_CAP))
+        ap = min(HARD_CAP, ap + amount)
         if overflow:
-            # The host has no verified mailbox inventory API. A saturated AP
-            # reading proves no overflow amount, so this is a manual estimate.
-            executable = False
-            warnings.append('OVERFLOW_REQUIRES_MAIL_VERIFICATION')
-            metadata['verification'] = 'manual_mail'
-        ap = min(HARD_CAP, ap)
-        add_mail(overflow, clock + MAIL_LIFETIME)
-        emit(action, before, amount, overflow_ap=overflow, **metadata)
+            estimated_overflow += overflow
+            warnings.extend(['SOURCE_DELIVERY_WILL_BE_VERIFIED', 'MAIL_EXPIRY_ESTIMATED'])
+            add_mail(overflow, clock + MAIL_LIFETIME, mail_id='forecast:' + str(sequence) + ':' + str(len(steps)))
+        emit(action, before, amount, overflow_ap=overflow, verification='scan_required', **metadata)
+
+    def claim_one(parcel, reason):
+        nonlocal ap
+        clear_to(HARD_CAP - parcel['amount'], reason)
+        before = ap
+        ap += parcel['amount']
+        mail.remove(parcel)
+        emit('mail', before, parcel['amount'], mail_id=parcel['id'],
+             verification='verified' if parcel['verified'] else 'estimated')
 
     while events:
         at, _, action, amount, metadata = heapq.heappop(events)
@@ -151,31 +221,13 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
             break
         advance(at)
         if action == 'mail':
-            urgent = any(p['expires_at'] - MARGIN <= clock for p in mail)
-            if not urgent:
-                continue
-            total = sum(p['amount'] for p in mail)
-            if total > HARD_CAP:
-                executable = False
-                warnings.append('MAIL_REQUIRES_SELECTIVE_COLLECTION')
-                emit('manual_mail', ap, total)
-                # Never pretend an oversized mailbox was collected safely.
-                break
-            clear_to(HARD_CAP - total, 'expiring_mail_headroom')
-            before = ap
-            ap += total
-            mail.clear()
-            emit('mail', before, total)
+            parcel = next((row for row in mail if row['id'] == metadata['mail_id']), None)
+            if parcel:
+                claim_one(parcel, 'expiring_mail_headroom')
         elif action == 'club':
-            # Club sign-in delivers an AP mail, not character AP. The live CN
-            # dialog and mailbox confirm delivery, but show no exact expiry.
-            # Keep unverified deliveries out of the known inventory entirely:
-            # neither a guessed lifetime nor a saturated AP counter proves it.
-            executable = False
             pending_mail_ap += amount
-            warnings.append('CLUB_REWARD_REQUIRES_MAIL_VERIFICATION')
-            emit(action, ap, amount, expected_mail_ap=amount,
-                 delivery='mail', verification='manual_mail')
+            warnings.append('CLUB_MAIL_WILL_BE_VERIFIED')
+            emit(action, ap, amount, expected_mail_ap=amount, delivery='mail', verification='scan_required', **metadata)
         elif action == 'manual_purchase':
             premium_cost += metadata['pyroxene']
             gain(action, amount, direct=True, **metadata)
@@ -186,56 +238,55 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
             amount = math.floor(cafe)
             cafe -= amount
             if amount:
-                gain(action, amount)
+                gain(action, amount, **metadata)
         elif action == 'ready':
-            available_at_target = {'character_ap': math.floor(ap), 'mail_ap': sum(p['amount'] for p in mail),
+            available_at_target = {'character_ap': math.floor(ap), 'mail_ap': sum(row['amount'] for row in mail),
                                    'cafe_ap': math.floor(cafe),
-                                   'total_ap': math.floor(ap) + math.floor(cafe) + sum(p['amount'] for p in mail)}
+                                   'total_ap': math.floor(ap) + math.floor(cafe) + sum(row['amount'] for row in mail)}
             emit('ready', ap)
             if settings['spend_at_target']:
-                before = ap
-                ap = 0
+                before, ap = ap, 0
                 emit('spend', before, before, task=settings['spend_task'])
-                # Target-window AP includes the cafe and mailbox. Show each
-                # withdrawal explicitly instead of stopping after character AP.
                 if cafe >= 1:
-                    clear_to(HARD_CAP - math.floor(cafe), 'cafe_headroom')
                     amount = math.floor(cafe)
                     cafe -= amount
-                    gain('cafe', amount)
-                    before = ap
-                    ap = 0
+                    gain('cafe', amount, source_key=server_day(clock, settings) + ':cafe:target')
+                    before, ap = ap, 0
                     emit('spend', before, before, task=settings['spend_task'])
-                total = sum(p['amount'] for p in mail)
-                if total > HARD_CAP:
-                    executable = False
-                    warnings.append('MAIL_REQUIRES_SELECTIVE_COLLECTION')
-                    emit('manual_mail', ap, total)
-                elif total:
-                    clear_to(HARD_CAP - total, 'target_mail_headroom')
-                    before = ap
-                    ap += total
-                    mail.clear()
-                    emit('mail', before, total)
-                    before = ap
-                    ap = 0
+                for parcel in sorted(list(mail), key=lambda row: (row['expires_at'], row['id'])):
+                    claim_one(parcel, 'target_mail_headroom')
+                    before, ap = ap, 0
                     emit('spend', before, before, task=settings['spend_task'])
         else:
-            gain(action, amount, direct=action == 'free')
+            gain(action, amount, direct=action == 'free', **metadata)
     if premium_cost:
         warnings.append('PREMIUM_PURCHASES_ARE_MANUAL')
     if discarded:
         warnings.append('CAFE_CAPACITY_LOSS')
-    if mail:
-        warnings.append('MAIL_IS_COLLECTED_AS_A_WHOLE')
-    result = {'generated_at': now.isoformat(), 'target_at': target.isoformat(), 'executable': executable,
-            'steps': steps, 'pending_mail_ap': pending_mail_ap, 'summary': {'character_ap': math.floor(ap),
-            'mail_ap': sum(p['amount'] for p in mail), 'cafe_ap': math.floor(cafe),
-            'total_ap': math.floor(ap) + math.floor(cafe) + sum(p['amount'] for p in mail),
-            'manual_pyroxene_budget': premium_cost, 'cafe_capacity_loss': math.floor(discarded)},
+    inventory.update(estimated_overflow_ap=estimated_overflow, pending_source_mail_ap=pending_mail_ap)
+    return {'generated_at': now.isoformat(), 'target_at': target.isoformat(), 'executable': executable,
+            'steps': steps, 'pending_mail_ap': pending_mail_ap, 'inventory': inventory,
+            'available_at_target': available_at_target,
+            'summary': {'character_ap': math.floor(ap), 'mail_ap': sum(row['amount'] for row in mail),
+                        'cafe_ap': math.floor(cafe), 'total_ap': math.floor(ap) + math.floor(cafe) + sum(row['amount'] for row in mail),
+                        'manual_pyroxene_budget': premium_cost, 'cafe_capacity_loss': math.floor(discarded)},
             'warnings': list(dict.fromkeys(warnings))}
-    # An interrupted timeline has no target forecast. Omit that optional field
-    # instead of presenting the current snapshot as target-time availability.
-    if available_at_target is not None:
-        result['available_at_target'] = available_at_target
-    return result
+
+
+def public_hoard_plan(plan: dict, *, omit_steps=False) -> dict:
+    """Bound history, never inventory; disclose exactly how much was omitted."""
+    from .schema import json_size
+    result = {**plan, 'steps_total': len(plan['steps']), 'steps_offset': 0,
+              'history_truncated': omit_steps or len(plan['steps']) > 256,
+              'steps': [] if omit_steps else plan['steps'][:256]}
+    if omit_steps:
+        result['steps_omitted'] = True
+    while True:
+        try:
+            json_size(result)
+            return result
+        except PluginError as error:
+            if error.code != 'PAYLOAD_TOO_LARGE' or not result['steps']:
+                raise
+            result['steps'] = result['steps'][:-1]
+            result['history_truncated'] = True
