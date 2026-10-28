@@ -210,7 +210,7 @@ def run_hoard(baas, settings, *, clock=time.time, sleep=time.sleep):
     actual = _read_ap(baas)
     plan = build_hoard_plan({**settings, 'current_ap': actual}, now=datetime.fromtimestamp(clock(), timezone.utc))
     require(plan['executable'], 'MANUAL_STEP_REQUIRED',
-            'This plan needs manual premium purchases or selective mail collection. Complete those steps and replan before automatic execution.')
+            'This plan needs manual purchases or mailbox verification, including club reward delivery. Complete those steps and replan before automatic execution.')
     completed = []
     for step in plan['steps']:
         deadline = instant(step['at']).timestamp()
@@ -233,7 +233,7 @@ def run_hoard(baas, settings, *, clock=time.time, sleep=time.sleep):
                 cafe_reward.to_cafe(baas, True)
                 cafe_reward.collect(baas)
             else:
-                task = {'daily': 'collect_daily_power', 'club': 'group', 'free': 'collect_daily_free_power',
+                task = {'daily': 'collect_daily_power', 'free': 'collect_daily_free_power',
                         'jjc': 'tactical_challenge_shop', 'mail': 'mail'}[action]
                 overrides = {}
                 if action == 'jjc':
@@ -249,6 +249,8 @@ def run_hoard(baas, settings, *, clock=time.time, sleep=time.sleep):
                 with configuration_overlay(baas, overrides):
                     require(baas.solve(task) is not False, 'DEVICE_TASK_FAILED', 'An AP source task failed.')
             ap = _read_ap(baas)
+            require(ap < 999, 'MAIL_VERIFICATION_REQUIRED',
+                    'The AP counter reached its hard cap and cannot prove the full reward was received. Check the mailbox and replan before continuing.')
             require(ap >= before + step['amount'], 'SOURCE_NOT_VERIFIED',
                     'The expected AP gain could not be verified; check the source and replan.')
         completed.append({'action': action, 'ap': ap})

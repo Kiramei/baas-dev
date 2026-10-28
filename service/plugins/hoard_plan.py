@@ -45,6 +45,7 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
     cafe = float(settings['cafe_stock'])
     clock = now
     premium_cost = 0
+    pending_mail_ap = 0
     discarded = 0
     executable = True
     available_at_target = None
@@ -165,6 +166,16 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
             ap += total
             mail.clear()
             emit('mail', before, total)
+        elif action == 'club':
+            # Club sign-in delivers an AP mail, not character AP. The live CN
+            # dialog and mailbox confirm delivery, but show no exact expiry.
+            # Keep unverified deliveries out of the known inventory entirely:
+            # neither a guessed lifetime nor a saturated AP counter proves it.
+            executable = False
+            pending_mail_ap += amount
+            warnings.append('CLUB_REWARD_REQUIRES_MAIL_VERIFICATION')
+            emit(action, ap, amount, expected_mail_ap=amount,
+                 delivery='mail', verification='manual_mail')
         elif action == 'manual_purchase':
             premium_cost += metadata['pyroxene']
             gain(action, amount, direct=True, **metadata)
@@ -179,7 +190,7 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
         elif action == 'ready':
             available_at_target = {'character_ap': math.floor(ap), 'mail_ap': sum(p['amount'] for p in mail),
                                    'cafe_ap': math.floor(cafe),
-                                   'total_ap': math.floor(ap + cafe) + sum(p['amount'] for p in mail)}
+                                   'total_ap': math.floor(ap) + math.floor(cafe) + sum(p['amount'] for p in mail)}
             emit('ready', ap)
             if settings['spend_at_target']:
                 before = ap
@@ -217,9 +228,14 @@ def build_hoard_plan(settings: dict, *, now: datetime | None = None) -> dict:
         warnings.append('CAFE_CAPACITY_LOSS')
     if mail:
         warnings.append('MAIL_IS_COLLECTED_AS_A_WHOLE')
-    return {'generated_at': now.isoformat(), 'target_at': target.isoformat(), 'executable': executable,
-            'steps': steps, 'available_at_target': available_at_target, 'summary': {'character_ap': math.floor(ap),
+    result = {'generated_at': now.isoformat(), 'target_at': target.isoformat(), 'executable': executable,
+            'steps': steps, 'pending_mail_ap': pending_mail_ap, 'summary': {'character_ap': math.floor(ap),
             'mail_ap': sum(p['amount'] for p in mail), 'cafe_ap': math.floor(cafe),
-            'total_ap': math.floor(ap + cafe) + sum(p['amount'] for p in mail),
+            'total_ap': math.floor(ap) + math.floor(cafe) + sum(p['amount'] for p in mail),
             'manual_pyroxene_budget': premium_cost, 'cafe_capacity_loss': math.floor(discarded)},
             'warnings': list(dict.fromkeys(warnings))}
+    # An interrupted timeline has no target forecast. Omit that optional field
+    # instead of presenting the current snapshot as target-time availability.
+    if available_at_target is not None:
+        result['available_at_target'] = available_at_target
+    return result

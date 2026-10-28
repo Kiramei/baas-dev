@@ -8,8 +8,8 @@
     "zh": "囤体"
   },
   "description": {
-    "en": "Plan AP, cafe storage and expiring mail, then run verified nonoverflow steps exclusively on this profile. Premium purchases, mailbox overflow verification and selective mail collection are manual. Restarting the backend requires replanning.",
-    "zh": "规划体力、咖啡存量与临期邮件，并独占配置执行可验证的不溢出步骤。青辉石购买、邮箱溢出核验和指定邮件领取需手动；重启后需重新规划。"
+    "en": "Plan AP, cafe storage and expiring mail, then run verified nonoverflow steps exclusively on this profile. Club reward mail, premium purchases, overflow verification and selective mail collection require manual verification. Restarting the backend requires replanning.",
+    "zh": "规划体力、咖啡存量与临期邮件，并独占配置执行可验证的不溢出步骤。小组签到邮件、青辉石购买、溢出核验和指定邮件领取需手动核对；重启后需重新规划。"
   },
   "author": "BAAS contributors",
   "permissions": [
@@ -162,7 +162,11 @@
         },
         "default": 10,
         "minimum": 0,
-        "maximum": 10
+        "maximum": 10,
+        "description": {
+          "en": "Only rewards not yet signed in today. Sign-in sends AP to mail; verify and list that mail, then set this to 0 before replanning. Future sign-ins still need verification.",
+          "zh": "仅填今日尚未签到的奖励。签到后核对并录入邮件，将此项改为0后重算；未来日期签到仍需核对。"
+        }
       },
       "jjc_mode": {
         "type": "string",
@@ -273,7 +277,199 @@
         "properties": {},
         "additionalProperties": false
       },
-      "timeout_seconds": 30
+      "timeout_seconds": 30,
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40
+          },
+          "target_at": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "pending_mail_ap": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "steps": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "maxLength": 40
+                },
+                "action": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "amount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ap_before": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999
+                },
+                "ap_after": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999
+                },
+                "mail_ap": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "expected_mail_ap": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "delivery": {
+                  "type": "string",
+                  "enum": [
+                    "mail"
+                  ]
+                },
+                "verification": {
+                  "type": "string",
+                  "enum": [
+                    "manual_mail"
+                  ]
+                },
+                "target_ap": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "task": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "overflow_ap": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "pyroxene": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "at",
+                "action",
+                "amount",
+                "ap_before",
+                "ap_after",
+                "mail_ap"
+              ]
+            }
+          },
+          "available_at_target": {
+            "type": "object",
+            "properties": {
+              "character_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mail_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cafe_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total_ap": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "character_ap",
+              "mail_ap",
+              "cafe_ap",
+              "total_ap"
+            ]
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "character_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mail_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cafe_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total_ap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "manual_pyroxene_budget": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cafe_capacity_loss": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "character_ap",
+              "mail_ap",
+              "cafe_ap",
+              "total_ap",
+              "manual_pyroxene_budget",
+              "cafe_capacity_loss"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "generated_at",
+          "target_at",
+          "executable",
+          "pending_mail_ap",
+          "steps",
+          "summary",
+          "warnings"
+        ]
+      }
     },
     {
       "id": "start",

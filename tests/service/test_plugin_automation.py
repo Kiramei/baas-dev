@@ -35,12 +35,20 @@ def hoard(**changes):
     return settings(target_at=(NOW + timedelta(hours=2)).isoformat(), **changes)
 
 
-def test_hoard_plan_accounts_for_soft_cap_cafe_and_daily_sources():
+def test_hoard_plan_excludes_unverified_club_delivery_from_ap_and_target_assets():
     result = build_hoard_plan(hoard(), now=NOW)
-    assert result['executable'] is True
-    assert result['summary'] == {'character_ap': 330, 'mail_ap': 0, 'cafe_ap': 61,
-                                 'total_ap': 391, 'manual_pyroxene_budget': 0, 'cafe_capacity_loss': 0}
+    assert result['executable'] is False
+    assert result['summary'] == {'character_ap': 320, 'mail_ap': 0, 'cafe_ap': 61,
+                                 'total_ap': 381, 'manual_pyroxene_budget': 0, 'cafe_capacity_loss': 0}
+    assert result['pending_mail_ap'] == 10
+    assert result['available_at_target'] == {'character_ap': 320, 'mail_ap': 0, 'cafe_ap': 61, 'total_ap': 381}
+    assert result['warnings'] == ['CLUB_REWARD_REQUIRES_MAIL_VERIFICATION']
     assert [s['action'] for s in result['steps']] == ['free', 'daily', 'club', 'ready']
+    club = result['steps'][2]
+    assert club['ap_before'] == club['ap_after'] == 320
+    assert club['mail_ap'] == 0 and club['expected_mail_ap'] == club['amount'] == 10
+    assert club['delivery'] == 'mail' and club['verification'] == 'manual_mail'
+    assert 'expires_at' not in club and 'overflow_ap' not in club
     assert all(0 <= s['ap_after'] <= 999 for s in result['steps'])
 
 
@@ -269,7 +277,7 @@ def live_ap_baas(tmp_path, initial=160):
     baas.ocr = SimpleNamespace(get_region_res=lambda *args: f"{state['ap']}/160")
     def solve(task):
         state['calls'].append(task)
-        state['ap'] += {'collect_daily_power': 150, 'collect_daily_free_power': 10, 'group': 10}.get(task, 0)
+        state['ap'] += {'collect_daily_power': 150, 'collect_daily_free_power': 10}.get(task, 0)
         return True
     baas.solve = solve
     return baas, state
@@ -277,11 +285,11 @@ def live_ap_baas(tmp_path, initial=160):
 
 def test_hoard_executor_reads_actual_ap_and_follows_timeline_without_real_device_io(tmp_path):
     baas, state = live_ap_baas(tmp_path)
-    values = settings(target_at=(NOW + timedelta(seconds=3)).isoformat(), current_ap=999, cafe_rate=0)
+    values = settings(target_at=(NOW + timedelta(seconds=3)).isoformat(), current_ap=999, club_ap=0, cafe_rate=0)
     result = run_hoard(baas, values, clock=lambda: state['time'], sleep=lambda seconds: state.update(time=state['time'] + seconds))
-    assert result['completed'] is True and result['actual_ap'] == 330
-    assert state['calls'] == ['collect_daily_free_power', 'collect_daily_power', 'group']
-    assert result['plan']['summary']['character_ap'] == 330
+    assert result['completed'] is True and result['actual_ap'] == 320
+    assert state['calls'] == ['collect_daily_free_power', 'collect_daily_power']
+    assert result['plan']['summary']['character_ap'] == 320
 
 
 @pytest.mark.parametrize('server', ['CN', 'Global', 'JP'])
@@ -494,3 +502,155 @@ def test_japan_game_zone_resets_at_four_even_when_browser_transmits_utc():
     first_claim = next(step for step in result['steps'] if step['action'] == 'daily')
     at = datetime.fromisoformat(first_claim['at'])
     assert at.hour == 3 and at.minute == 50 and at.utcoffset() == timedelta(hours=9)
+
+
+def test_club_delivery_has_no_invented_expiry_and_never_becomes_spendable_inventory():
+    result = build_hoard_plan(settings(target_at=(NOW + timedelta(days=3)).isoformat(),
+                                       current_ap=160, cafe_rate=0, daily_ap=0,
+                                       claim_free_ap=False, spend_at_target=True), now=NOW)
+    club = [step for step in result['steps'] if step['action'] == 'club']
+    assert len(club) == 4  # The current day plus three future sign-ins.
+    assert result['pending_mail_ap'] == 40 and result['executable'] is False
+    assert all(step['ap_before'] == step['ap_after'] and step['mail_ap'] == 0 for step in club)
+    assert all(step['expected_mail_ap'] == 10 and 'expires_at' not in step and 'overflow_ap' not in step for step in club)
+    assert not any(step['action'] in {'mail', 'manual_mail'} for step in result['steps'])
+    assert 'OVERFLOW_REQUIRES_MAIL_VERIFICATION' not in result['warnings']
+    assert result['available_at_target']['character_ap'] == 610
+    assert result['available_at_target']['mail_ap'] == result['summary']['mail_ap'] == 0
+    assert result['available_at_target']['total_ap'] == 610
+
+
+def test_confirmed_mail_keeps_its_explicit_deadline_separate_from_unverified_club_delivery():
+    expiry = NOW + timedelta(hours=25)
+    result = build_hoard_plan(settings(target_at=(NOW + timedelta(hours=25)).isoformat(),
+                                       current_ap=160, cafe_rate=0, daily_ap=0,
+                                       claim_free_ap=False,
+                                       mail=[{'amount': 10, 'expires_at': expiry.isoformat()}]), now=NOW)
+    # Only the user-entered old mail can be collected. New club deliveries have
+    # no verified expiry, cannot inherit the 24h overflow estimate, and stay out.
+    claims = [step for step in result['steps'] if step['action'] == 'mail']
+    assert len(claims) == 1 and claims[0]['amount'] == 10
+    assert datetime.fromisoformat(claims[0]['at']) == expiry - timedelta(minutes=10)
+    assert result['pending_mail_ap'] == 20
+    assert result['summary']['character_ap'] == 320  # 160 + tomorrow's daily 150 + known mail 10.
+    assert result['summary']['mail_ap'] == 0
+    assert 'CLUB_REWARD_REQUIRES_MAIL_VERIFICATION' in result['warnings']
+
+
+def test_club_mail_plan_is_rejected_before_any_source_or_following_step(tmp_path):
+    baas, state = live_ap_baas(tmp_path, 999)
+    values = settings(target_at=(NOW + timedelta(seconds=3)).isoformat(), daily_ap=0,
+                      claim_free_ap=False, cafe_rate=0)
+    with pytest.raises(PluginError) as error:
+        run_hoard(baas, values, clock=lambda: state['time'],
+                  sleep=lambda seconds: state.update(time=state['time'] + seconds))
+    assert error.value.code == 'MANUAL_STEP_REQUIRED'
+    assert state['ap'] == 999 and state['calls'] == [] and state['time'] == NOW.timestamp()
+
+
+def test_underestimated_source_cannot_report_success_from_a_saturated_ap_counter(tmp_path):
+    baas, state = live_ap_baas(tmp_path, 900)
+    def solve(task):
+        state['calls'].append(task)
+        assert task == 'collect_daily_power'
+        state['overflow_ap'] = max(0, state['ap'] + 150 - 999)
+        state['ap'] = min(999, state['ap'] + 150)
+        return True
+    baas.solve = solve
+    values = settings(target_at=(NOW + timedelta(seconds=3)).isoformat(), daily_ap=50,
+                      club_ap=0, claim_free_ap=False, cafe_rate=0)
+    with pytest.raises(PluginError) as error:
+        run_hoard(baas, values, clock=lambda: state['time'],
+                  sleep=lambda seconds: state.update(time=state['time'] + seconds))
+    assert error.value.code == 'MAIL_VERIFICATION_REQUIRED'
+    assert state['calls'] == ['collect_daily_power'] and state['ap'] == 999 and state['overflow_ap'] == 51
+    assert state['time'] < (NOW + timedelta(seconds=3)).timestamp()
+
+
+@pytest.mark.parametrize('changes', [
+    {}, {'club_ap': 0},
+    {'current_ap': 999, 'claim_free_ap': False},
+    {'tube_count': 3},
+    {'spend_at_target': True, 'cafe_stock': 200,
+     'mail': [{'amount': 100, 'expires_at': (NOW + timedelta(hours=5)).isoformat()}]},
+    {'mail': [{'amount': 600, 'expires_at': (NOW + timedelta(hours=1)).isoformat()},
+              {'amount': 500, 'expires_at': (NOW + timedelta(hours=1)).isoformat()}]},
+])
+def test_hoard_plan_output_schema_covers_pending_delivery_and_interrupted_timelines(changes):
+    manifest = json.loads((BUNDLED / 'baas.hoard-ap/plugin.json').read_text())
+    output = build_hoard_plan(hoard(**changes), now=NOW)
+    validate_value(manifest['actions'][0]['output_schema'], output)
+    if output['steps'][-1]['action'] == 'manual_mail':
+        assert 'available_at_target' not in output
+
+
+def test_real_manager_plan_validates_club_output_and_start_refuses_before_device_initialization(tmp_path, monkeypatch):
+    from service.plugins import hoard_plan
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+    # Exercise the production manager/runtime with a deterministic game clock,
+    # including when CI runs close to the real server-day reset.
+    monkeypatch.setattr(hoard_plan, 'datetime', FixedDateTime)
+    fake_baas(tmp_path)
+    runtime = ServiceRuntime(tmp_path)
+    initialized = []
+    async def denied(*args, **kwargs):
+        initialized.append(True)
+        pytest.fail('A manual club plan must not initialize a device or claim any source')
+    runtime._run_plugin_owned_task = denied
+    target = NOW + timedelta(hours=2)
+    old_mail = {'amount': 10, 'expires_at': (target + timedelta(days=3)).isoformat()}
+    new_mail = {'amount': 10, 'expires_at': (target + timedelta(days=6)).isoformat()}
+    async def finish(job):
+        for _ in range(200):
+            state = await runtime.plugins.get_job('one', job['id'])
+            if state['state'] not in {'queued', 'running'}:
+                return state
+            await asyncio.sleep(.01)
+        pytest.fail('The real plugin job did not settle')
+    async def run(action):
+        return await finish(await runtime.plugins.run('one', {'plugin_id': 'baas.hoard-ap',
+                            'action_id': action, 'input': {}, 'request_id': str(uuid.uuid4())}))
+    async def scenario():
+        await runtime.plugins.set_enabled('one', {'plugin_id': 'baas.hoard-ap', 'enabled': True})
+        stored = await runtime.plugins.settings('one', 'baas.hoard-ap')
+        values = {**stored['values'], 'target_at': target.isoformat(), 'current_ap': 999,
+                  'soft_cap': 240, 'daily_ap': 0, 'cafe_rate': 0, 'claim_free_ap': False,
+                  'mail': [old_mail]}
+        await runtime.plugins.update_settings('one', {'plugin_id': 'baas.hoard-ap',
+                                             'revision': stored['revision'], 'values': values})
+        job = await run('plan')
+        assert job['state'] == 'succeeded', job
+        result = job['result']
+        assert result['executable'] is False and result['pending_mail_ap'] == 10
+        assert result['available_at_target']['mail_ap'] == 10
+        assert result['available_at_target']['total_ap'] == 1009
+        club = next(step for step in result['steps'] if step['action'] == 'club')
+        assert club['ap_before'] == club['ap_after'] == 999 and club['mail_ap'] == 10
+        assert club['expected_mail_ap'] == 10 and club['delivery'] == 'mail'
+        assert result['warnings'] == ['CLUB_REWARD_REQUIRES_MAIL_VERIFICATION', 'MAIL_IS_COLLECTED_AS_A_WHOLE']
+        refused = await run('start')
+        assert refused['state'] == 'failed' and refused['error']['code'] == 'MANUAL_STEP_REQUIRED'
+        assert initialized == []
+        # After manual sign-in the user verifies the new mail and explicitly
+        # lists it once, disabling today's pending club reward before replanning.
+        stored = await runtime.plugins.settings('one', 'baas.hoard-ap')
+        await runtime.plugins.update_settings('one', {'plugin_id': 'baas.hoard-ap',
+               'revision': stored['revision'], 'values': {**values, 'club_ap': 0, 'mail': [old_mail, new_mail]}})
+        replanned = await run('plan')
+        assert replanned['state'] == 'succeeded', replanned
+        assert replanned['result']['pending_mail_ap'] == 0 and replanned['result']['executable'] is True
+        assert replanned['result']['available_at_target']['mail_ap'] == 20
+        assert replanned['result']['available_at_target']['total_ap'] == 1019
+        assert initialized == []
+    asyncio.run(scenario())
+
+
+def test_forecast_totals_do_not_combine_unspendable_fractions_from_separate_ap_bars():
+    result = build_hoard_plan(settings(target_at=(NOW + timedelta(minutes=50)).isoformat(),
+                                       current_ap=100, daily_ap=0, club_ap=0, claim_free_ap=False), now=NOW)
+    for assets in (result['available_at_target'], result['summary']):
+        assert assets['character_ap'] == 108 and assets['cafe_ap'] == 25
+        assert assets['total_ap'] == assets['character_ap'] + assets['cafe_ap'] + assets['mail_ap'] == 133
