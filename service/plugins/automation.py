@@ -122,15 +122,45 @@ def run_auto_push(baas, action, settings):
     return {'completed': True, 'action': action, 'settings_applied_to_profile': False}
 
 
-def _read_ap(baas):
-    """Do not use get_ap's 999-on-OCR-failure fallback for purchase/clear guards."""
+def _cn_ap_panel_clear(image):
+    """The verified CN home AP plate is white; achievement toasts dim it."""
+    import numpy as np
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3:
+        return False
+    height, width = image.shape[:2]
+    if not height or abs(width / height - 16 / 9) >= .02:
+        return False
+    def white_fraction(region):
+        x1, y1, x2, y2 = region
+        patch = image[int(y1 * height / 720):int(y2 * height / 720),
+                      int(x1 * width / 1280):int(x2 * width / 1280)]
+        return bool(patch.size) and float(np.mean(np.all(patch >= 200, axis=2)))
+    return (white_fraction((485, 23, 586, 54)) >= .65
+            and white_fraction((485, 20, 580, 25)) >= .8
+            and white_fraction((485, 50, 580, 54)) >= .8)
+
+
+def _read_ap(baas, *, clock=time.monotonic, sleep=time.sleep):
+    """Read AP after transient overlays, without replaying any resource action."""
+    _running(baas)
     baas.to_main_page()
-    baas.update_screenshot_array()
-    region = (485, 23, 586, 54) if baas.server == 'CN' else (536, 26, 619, 44)
-    text = baas.ocr.get_region_res(baas, region, 'en-us', 'AP', '0123456789/')
-    match = re.fullmatch(r'\s*(\d{1,3})(?:\s*/\s*\d{1,3})?\s*', str(text))
-    require(match is not None and int(match[1]) <= 999, 'AP_OCR_FAILED', 'Current AP could not be verified; automation stopped.')
-    return int(match[1])
+    cn = baas.server == 'CN'
+    region = (485, 23, 586, 54) if cn else (536, 26, 619, 44)
+    deadline = clock() + 5
+    for _ in range(20 if cn else 1):
+        _running(baas)
+        baas.update_screenshot_array()
+        if not cn or _cn_ap_panel_clear(getattr(baas, 'latest_img_array', None)):
+            text = baas.ocr.get_region_res(baas, region, 'en-us', 'AP', '0123456789/')
+            match = re.fullmatch(r'\s*(\d{1,3})(?:\s*/\s*\d{1,3})?\s*', str(text))
+            if match is not None and int(match[1]) <= 999:
+                return int(match[1])
+        remaining = deadline - clock()
+        if not cn or remaining <= 0:
+            break
+        _running(baas)
+        sleep(min(.25, remaining))
+    raise PluginError('AP_OCR_FAILED', 'Current AP could not be verified; automation stopped.')
 
 
 

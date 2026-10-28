@@ -20,6 +20,11 @@ import numpy as np
 from .errors import PluginError, require
 
 MAX_PAGES = 402  # Short overlapping gestures preserve even identical letters.
+_VISUAL_CAPTURE_ERRORS = frozenset({
+    'MAIL_SCREEN_UNREADABLE', 'MAIL_COUNT_UNREADABLE', 'MAIL_ITEM_UNCERTAIN',
+    'MAIL_CLAIM_UNCERTAIN', 'MAIL_IDENTITY_UNREADABLE', 'MAIL_AMOUNT_UNREADABLE',
+    'MAIL_EXPIRY_UNREADABLE', 'MAIL_LIST_UNREADABLE', 'AP_OCR_FAILED',
+})
 
 
 class _PrivateOcrLogger:
@@ -211,17 +216,31 @@ def _capture(baas, clock):
     _check(baas)
     captured_at = clock()
     image = _frame(baas.get_screenshot_array())
+    observed_count = None
 
     def read(region, field):
+        nonlocal observed_count
         _check(baas)
         x1, y1, x2, y2 = region
         try:
-            return baas.ocr.ocr_for_single_line('zh-cn', log_info='mailbox', origin_image=_ocr_crop(image[y1:y2, x1:x2], field),
-                                              pass_method=1, filter_score=.8, _logger=_PRIVATE_OCR_LOGGER)
+            value = baas.ocr.ocr_for_single_line('zh-cn', log_info='mailbox', origin_image=_ocr_crop(image[y1:y2, x1:x2], field),
+                                               pass_method=1, filter_score=.8, _logger=_PRIVATE_OCR_LOGGER)
         except Exception:
             raise PluginError('MAIL_OCR_UNAVAILABLE', 'The mailbox could not be recognized safely.') from None
+        if field == 'count':
+            match = re.fullmatch(r'(\d{1,3})/200', _text(value))
+            if match is not None and int(match[1]) <= 200:
+                observed_count = int(match[1])
+        return value
 
-    return parse_mail_frame(image, read, captured_at)
+    try:
+        return parse_mail_frame(image, read, captured_at)
+    except PluginError as error:
+        # Preserve only the verified numeric count, even if a later row crop is
+        # moving. A failed frame cannot conceal mail arriving or expiring.
+        if observed_count is not None:
+            error.mailbox_count = observed_count
+        raise
 
 
 def _same_row(first, second):
@@ -241,12 +260,30 @@ def _same_page(first, second):
 
 
 def _stable_page(baas, clock, sleep):
-    first = _capture(baas, clock)
-    _pause(baas, sleep)
-    second = _capture(baas, clock)
-    require(_same_page(first, second),
-            'MAIL_LIST_CHANGED', 'The mailbox changed during recognition; rescan before continuing.')
-    return second
+    previous, count = None, None
+    for index in range(5):
+        if index:
+            _pause(baas, sleep)
+        _check(baas)
+        try:
+            current = _capture(baas, clock)
+        except PluginError as error:
+            if error.code not in _VISUAL_CAPTURE_ERRORS:
+                raise
+            observed_count = getattr(error, 'mailbox_count', None)
+            if observed_count is not None:
+                require(count is None or count == observed_count,
+                        'MAIL_LIST_CHANGED', 'Mail arrived or expired during recognition; rescan before continuing.')
+                count = observed_count
+            previous = None
+            continue
+        require(count is None or count == current['count'],
+                'MAIL_LIST_CHANGED', 'Mail arrived or expired during recognition; rescan before continuing.')
+        count = current['count']
+        if previous is not None and _same_page(previous, current):
+            return current
+        previous = current
+    raise PluginError('MAIL_LIST_CHANGED', 'The mailbox did not settle during recognition; rescan before continuing.')
 
 
 def _swipe(baas, down, sleep):
